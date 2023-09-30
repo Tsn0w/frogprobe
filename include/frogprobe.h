@@ -3,10 +3,15 @@
  * frogprobe is I/S for hooking kernel functions just like kprobe with the ability to
  * sleep in it, currently kprobe are working with percpu variables (current_kprobe).
  * This type of probe are aiming to solve this issue.
+ * Both pre and post handlers should have the same functions signautre (or at least
+ * same number of params you wish to inspect)
  *
  * when register a frogprobe one need the following:
- *  - pre_handler: the handler to be called before the function execute
+ *  - pre/post_handler: the handler to be called before the function execute
  *  - symbol_name: the symbol of the point want to probe
+ *
+ * Known limitations:
+ * - Doesn't support functions with args on stack
  */
 
 typedef struct frogprobe_s {
@@ -15,6 +20,7 @@ typedef struct frogprobe_s {
     void *address;
     char *symbol_name;
     void *pre_handler;
+    void *post_handler;
 } frogprobe_t;
 
 int register_frogprobe(frogprobe_t *fp);

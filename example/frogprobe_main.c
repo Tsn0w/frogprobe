@@ -8,14 +8,20 @@
 MODULE_LICENSE("GPL");
 
 
-static void pre_handler(void)
+static void pre_handler(bool wait, const char *fmt)
 {
-    printk(KERN_INFO"called __request_module!\n");
+    printk(KERN_INFO"called __request_module pre with fmt: %s!\n", fmt);
+}
+
+static void post_handler(bool wait, const char *fmt)
+{
+    printk(KERN_INFO"called __request_module post with fmt: %s!\n", fmt);
 }
 
 static frogprobe_t __request_module_probe = {
     .symbol_name = "__request_module",
     .pre_handler = (void *)&pre_handler,
+    .post_handler = (void *)&post_handler,
 };
 
 static int __init frogprobe_init(void)
@@ -31,7 +37,9 @@ static int __init frogprobe_init(void)
         printk(KERN_ERR"failed to register frogprobe on: %s (%d)\n", __request_module_probe.symbol_name, rc);
         return -1;
     }
+
     printk(KERN_INFO"init frogprobe successfully!\n");
+    printk(KERN_INFO"Run dummy binary to call handlers\n");
     return 0;
 }
 
