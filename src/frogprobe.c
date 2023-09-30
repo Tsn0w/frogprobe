@@ -2,29 +2,13 @@
 
 #include <linux/moduleloader.h>
 #include <linux/printk.h>
-#include <linux/string.h>
 
 #include <symbol_extractor.h>
 #include <frogprobe.h>
+#include <encoder.h>
 
 #define NOP_SIZE 5
 static const char big_nop[NOP_SIZE] = { 0x0f, 0x1f, 0x44, 0x00, 0x00 };
-
-#define PUSH_REGS_SIZE 10
-static const char push_regs[PUSH_REGS_SIZE] = { 0x57, 0x56, 0x52, 0x51, 0x41, 0x50,
-                                                0x41, 0x51, 0x41, 0x52 };
-
-#define RIP_REL_CALL_SIZE 6
-static const char call_pre_handler[RIP_REL_CALL_SIZE] = { 0xff, 0x15, 0x0c,
-                                                          0x00, 0x00, 0x00 };
-
-#define POP_REGS_SIZE 10
-static const char pop_regs[PUSH_REGS_SIZE] = { 0x41, 0x5a, 0x41, 0x59, 0x41, 0x58,
-                                               0x59, 0x5a, 0x5e, 0x5f };
-
-#define RET_INSN 0xc3
-#define INT3_INSN 0xcc
-
 
 void *module_alloc_around_call(void *addr, int size)
 {
@@ -48,17 +32,20 @@ void *module_alloc_around_call(void *addr, int size)
  */
 bool create_trampoline(frogprobe_t *fp)
 {
-    int stub_size = PUSH_REGS_SIZE + RIP_REL_CALL_SIZE + POP_REGS_SIZE + 2 + 8;
+    int stub_size = PUSH_CALL_CONVENTIONS_REGS_SIZE + RIP_REL_CALL_SIZE +
+                    POP_CALL_CONVENTIONS_REGS_SIZE + RETQ_SIZE + 8;
     char *trampoline = module_alloc_around_call(fp->address, stub_size);
     if (!trampoline) {
         return false;
     }
 
-    memcpy(trampoline, push_regs, PUSH_REGS_SIZE);
-    memcpy(trampoline + PUSH_REGS_SIZE, call_pre_handler, RIP_REL_CALL_SIZE);
-    memcpy(trampoline + PUSH_REGS_SIZE + RIP_REL_CALL_SIZE, pop_regs, POP_REGS_SIZE);
-    trampoline[stub_size - 2 - 8] = RET_INSN;
-    trampoline[stub_size - 1 - 8] = INT3_INSN;
+    int offset = 0;
+    encode_push_calling_conventions_regs(trampoline, &offset);
+    encode_relative_call(trampoline, &offset,
+                         (uint64_t)(trampoline + stub_size - 8));
+    encode_pop_calling_conventions_regs(trampoline, &offset);
+    encode_retq(trampoline, &offset);
+
     *(uint64_t *)(trampoline + stub_size - 8) = (uint64_t)fp->pre_handler;
 
     int npages = DIV_ROUND_UP(stub_size, PAGE_SIZE);
