@@ -43,3 +43,31 @@ void encode_retq(char *trampoline, int *offset)
     trampoline[*offset + 1] = INT3_INSN;
     *offset += RETQ_SIZE;
 }
+
+void encode_movabs_rax(char *trampoline, int *offset, uint64_t imm)
+{
+    trampoline[*offset] = 0x48;
+    trampoline[*offset + 1] = 0xb8;
+    *(uint64_t *)(trampoline + *offset + 2) = imm;
+    *offset += MOVABS_RAX_SIZE;
+}
+
+void encode_push_rax(char *trampoline, int *offset)
+{
+    trampoline[*offset] = 0x50;
+    *offset += PUSH_RAX_SIZE;
+}
+
+void encode_pop_r11(char *trampoline, int *offset)
+{
+    trampoline[*offset] = 0x41;
+    trampoline[*offset + 1] = 0x5b;
+    *offset += POP_R11_SIZE;
+}
+
+void encode_push_r11(char *trampoline, int *offset)
+{
+    trampoline[*offset] = 0x41;
+    trampoline[*offset + 1] = 0x53;
+    *offset += PUSH_R11_SIZE;
+}
