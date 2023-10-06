@@ -12,5 +12,4 @@ frogprobe - like x86_64 kprobe but you can sleep in it
 - [ ] support multiple frogprobe on the same function
 - [ ] speed up trampoline stubs (siwtch call + ret to 2 jmp, instead rip rel call, movabs + call, ....) and test if really helps
 - [ ] Support hook functions which doesn't start enough space for call
-- [ ] switch stop_machine to text_poke (understand how it's works and why don't disable X86_64_WP cpu flag)
 - [ ] Implement trampoline using RETHUNK instead of 'ret; int3' (as done in frace create_trampoline)

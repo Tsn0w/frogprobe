@@ -124,31 +124,6 @@ bool create_trampoline(frogprobe_t *fp)
     return true;
 }
 
-void disable_WP(void)
-{
-    unsigned long cr0 = read_cr0() & ~(X86_CR0_WP);
-    __asm__ volatile("mov %0,%%cr0": "+r" (cr0) : : "memory");
-}
-
-void enable_WP(void)
-{
-    unsigned long cr0 = read_cr0() | X86_CR0_WP;
-    __asm__ volatile("mov %0,%%cr0": "+r" (cr0) : : "memory");
-}
-
-static int apply_trampoline(void *arg)
-{
-    frogprobe_t *fp = (frogprobe_t *)arg;
-    char opcode[5] = { 0xe8, 0x00, 0x00, 0x00, 0x00 }; // call prefix
-    *(uint32_t *)(opcode + 1) = (unsigned long)fp->trampoline - (unsigned long)fp->address - 5;
-
-    disable_WP();
-    memcpy(fp->address, opcode, 5);
-    enable_WP();
-
-	return 0;
-}
-
 /*
  * Register hook (frogprobe) on address for symbol given (fp->symbol) only if
  * the symbol is kprobeable using ftrace (meaning starts with 1 big nop)
@@ -201,25 +176,16 @@ int register_frogprobe(frogprobe_t *fp)
         return -ENOMEM;
     }
 
-    stop_machine_p(apply_trampoline, (void *)fp, cpu_online_mask);
+    char opcode[CALL_SIZE] = { 0xe8, 0x00, 0x00, 0x00, 0x00 }; // call prefix
+    *(uint32_t *)(opcode + 1) = (unsigned long)fp->trampoline - (unsigned long)fp->address - CALL_SIZE;
+
+    text_poke_p(fp->address, opcode, CALL_SIZE);
     return 0;
-}
-
-
-static int revert_trampoline(void *arg)
-{
-    frogprobe_t *fp = (frogprobe_t *)arg;
-
-    disable_WP();
-    memcpy(fp->address, big_nop, NOP_SIZE);
-    enable_WP();
-
-	return 0;
 }
 
 void unregister_frogprobe(frogprobe_t *fp)
 {
-    stop_machine_p(revert_trampoline, (void *)fp, cpu_online_mask);
+    text_poke_p(fp->address, big_nop, NOP_SIZE);
     vfree(fp->trampoline);
 
     fp->trampoline = 0;

@@ -2,6 +2,8 @@
 
 #include <linux/types.h>
 
+#define CALL_SIZE 5
+
 #define RIP_REL_CALL_SIZE 6
 void encode_relative_call(char *trampoline, int *offset, uint64_t dest);
 
