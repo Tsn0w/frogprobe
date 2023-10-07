@@ -15,6 +15,15 @@ void encode_relative_call(char *trampoline, int *offset, uint64_t dest)
     *offset += RIP_REL_CALL_SIZE;
 }
 
+void encode_byte_rel_jump(char *trampoline, int *offset, uint64_t dest)
+{
+    short rel_off = (short)(dest - BYTE_REL_JUMP_SIZE - (uint64_t)trampoline -
+                            *offset) & 0xff;
+    trampoline[*offset] = 0x74;
+    trampoline[*offset + 1] = rel_off;
+    *offset += BYTE_REL_JUMP_SIZE;
+}
+
 void encode_push_calling_conventions_regs(char *trampoline, int *offset)
 {
     static const char push_regs[PUSH_CALL_CONVENTIONS_REGS_SIZE] = { 0x57, 0x56,
@@ -70,4 +79,22 @@ void encode_push_r11(char *trampoline, int *offset)
     trampoline[*offset] = 0x41;
     trampoline[*offset + 1] = 0x53;
     *offset += PUSH_R11_SIZE;
+}
+
+void encode_cmp_rax_imm(char *trampoline, int *offset, uint32_t imm)
+{
+    trampoline[*offset] = 0x48;
+    trampoline[*offset + 1] = 0x3d;
+    *(uint32_t *)(trampoline + *offset + 2) = imm;
+    *offset += CMP_RAX_IMM;
+}
+
+void encode_mov_rax_to_rsp_offset(char *trampoline, int *offset, int rsp_offset)
+{
+    static const char mov_rax_rsp_base[MOV_RAX_TO_RSP_PREFIX_SIZE] = { 0x48, 0x89,
+                                                                       0x44, 0x24 };
+
+    memcpy(trampoline + *offset, mov_rax_rsp_base, MOV_RAX_TO_RSP_PREFIX_SIZE);
+    trampoline[*offset + MOV_RAX_TO_RSP_PREFIX_SIZE] = (rsp_offset & 0xff);
+    *offset += MOV_RAX_TO_RSP_BASE_SIZE;
 }
