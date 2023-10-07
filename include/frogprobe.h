@@ -23,5 +23,10 @@ typedef struct frogprobe_s {
     void *post_handler;
 } frogprobe_t;
 
+// must be the first line of the post_handler (if whish to use)
+#define get_return_value(var)                 \
+    register unsigned long _dummy asm("rax"); \
+    unsigned long var = _dummy
+
 int register_frogprobe(frogprobe_t *fp);
 void unregister_frogprobe(frogprobe_t *fp);

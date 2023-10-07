@@ -15,7 +15,10 @@ static void pre_handler(bool wait, const char *fmt)
 
 static void post_handler(bool wait, const char *fmt)
 {
-    printk(KERN_INFO"called __request_module post with fmt: %s!\n", fmt);
+    // must be the first line of the post_handler
+    get_return_value(orig_rc);
+
+    printk(KERN_INFO"called __request_module pre with fmt: %s! (rc: %lu)\n", fmt, orig_rc);
 }
 
 static frogprobe_t __request_module_probe = {

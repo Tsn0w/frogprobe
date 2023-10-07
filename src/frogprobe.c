@@ -24,6 +24,7 @@ extern void frogprobe_post_handler_ex(void);
 __asm__(
 "frogprobe_post_handler_ex:"
 ".intel_syntax;"
+    "pop %r11;"
     "pop %r10;"
     "pop %r9;"
     "pop %r8;"
@@ -31,6 +32,9 @@ __asm__(
     "pop %rdx;"
     "pop %rsi;"
     "pop %rdi;"
+    "push %rax;" // save original return value
+    "call %r11;"
+    "pop %rax;"
     "ret; int3;"
 ".att_syntax;"
 );
@@ -42,9 +46,9 @@ __asm__(
  * Stub post_handler logic is:
  *  movabs rax, post_handler
  *  pop r11
+ *  push rdi, rsi, rdx, rcx, r8, r9, r10
  *  push rax
  *  movabs rax, frogprobe_post_handler_ex
- *  push rdi, rsi, rdx, rcx, r8, r9, r10
  *  push rax
  *  push r11
  *
@@ -57,8 +61,8 @@ __asm__(
  * Stack after logic:
  *          -------------------------------------
  *         |       original return address       |
- *         |           fp->post_handler          |
  *         |       calling conventions regs      |
+ *         |           fp->post_handler          |
  *         |       frogprobe_post_handler_ex     |
  *         |             fp->addr + 5            |
  *          -------------------------------------
@@ -74,9 +78,9 @@ void prepare_post_handler_trampoline(char *tramp, int *offset, uint64_t post_han
 {
     encode_movabs_rax(tramp, offset, post_handler);
     encode_pop_r11(tramp, offset);
+    encode_push_calling_conventions_regs(tramp, offset);
     encode_push_rax(tramp, offset);
     encode_movabs_rax(tramp, offset, (uint64_t)&frogprobe_post_handler_ex);
-    encode_push_calling_conventions_regs(tramp, offset);
     encode_push_rax(tramp, offset);
     encode_push_r11(tramp, offset);
 }
