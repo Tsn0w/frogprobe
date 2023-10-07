@@ -4,7 +4,12 @@
  * sleep in it, currently kprobe are working with percpu variables (current_kprobe).
  * This type of probe are aiming to solve this issue.
  * Both pre and post handlers should have the same functions signautre (or at least
- * same number of params you wish to inspect)
+ * same number of params you wish to inspect).
+ *
+ * Beside post & pre handlers, there is a way to fully replace the symbol by returning
+ * the address want to run (in the pre_handler), it will cause the address to be
+ * executed instead of the original functions in the order of:
+ *  pre_handler -> address returned at pre_handler -> post_handler
  *
  * when register a frogprobe one need the following:
  *  - pre/post_handler: the handler to be called before the function execute

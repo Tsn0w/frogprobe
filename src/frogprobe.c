@@ -91,6 +91,10 @@ void prepare_post_handler_trampoline(char *tramp, int *offset, uint64_t post_han
  *  push rdi, rsi, rdx, rcx, r8, r9, r10
  *  call [rip + pre_handler_offset]
  *  pop r10, r9, r8, rcx, rdx, rsi, rdi
+ *  cmp rax, 0x0
+ *  ja exit
+ *  mov [rsp], rax // override function with new function
+ * exit:
  *  ret
  *  int 3
  * pre_handler_offset:
@@ -100,7 +104,8 @@ bool create_trampoline(frogprobe_t *fp)
 {
     bool is_post_handler = fp->post_handler ? true : false;
     int stub_size = PUSH_CALL_CONVENTIONS_REGS_SIZE + RIP_REL_CALL_SIZE +
-                    POP_CALL_CONVENTIONS_REGS_SIZE + RETQ_SIZE + 8 +
+                    POP_CALL_CONVENTIONS_REGS_SIZE +  CMP_RAX_IMM +
+                    BYTE_REL_JUMP_SIZE + MOV_RAX_TO_RSP_BASE_SIZE + RETQ_SIZE + 8 +
                     (is_post_handler ? POST_HANDLER_PREP_SIZE : 0);
     char *trampoline = module_alloc_around_call(fp->address, stub_size);
     if (!trampoline) {
@@ -116,6 +121,13 @@ bool create_trampoline(frogprobe_t *fp)
     encode_relative_call(trampoline, &offset,
                          (uint64_t)(trampoline + stub_size - 8));
     encode_pop_calling_conventions_regs(trampoline, &offset);
+
+    // override trampoline return address (func + 5) to override the hooked symbol
+    encode_cmp_rax_imm(trampoline, &offset, 0);
+    encode_byte_rel_jump(trampoline, &offset, (uint64_t)(trampoline + offset +
+                         BYTE_REL_JUMP_SIZE +  MOV_RAX_TO_RSP_BASE_SIZE));
+    encode_mov_rax_to_rsp_offset(trampoline, &offset, 0);
+
     encode_retq(trampoline, &offset);
 
     *(uint64_t *)(trampoline + offset) = (uint64_t)fp->pre_handler;
@@ -125,6 +137,7 @@ bool create_trampoline(frogprobe_t *fp)
 
     fp->trampoline = trampoline;
     fp->npages = npages;
+
     return true;
 }
 
@@ -154,6 +167,7 @@ bool create_trampoline(frogprobe_t *fp)
  *                     |              push regs               |
  *                     |    call [rip + pre_handler_offset]   |
  *                     |               pop regs               |
+ *                     |     logic to change rc (if need)     |
  *                     |               ret; int3              |
  * pre_handler_offset: |           fp->post_handler           |
  *                      --------------------------------------

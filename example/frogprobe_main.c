@@ -8,9 +8,16 @@
 MODULE_LICENSE("GPL");
 
 
-static void pre_handler(bool wait, const char *fmt)
+static int function_replacement(void)
+{
+    printk("Function '__request_module' replaced with %s", __FUNCTION__);
+    return -1;
+}
+
+static void *pre_handler(bool wait, const char *fmt)
 {
     printk(KERN_INFO"called __request_module pre with fmt: %s!\n", fmt);
+    return (void *)&function_replacement;
 }
 
 static void post_handler(bool wait, const char *fmt)
