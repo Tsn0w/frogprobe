@@ -4,6 +4,9 @@
 
 #define CALL_SIZE 5
 
+#define NOP_SIZE 5
+static const char big_nop[NOP_SIZE] = { 0x0f, 0x1f, 0x44, 0x00, 0x00 };
+
 #define RIP_REL_CALL_SIZE 6
 void encode_relative_call(char *trampoline, int *offset, uint64_t dest);
 

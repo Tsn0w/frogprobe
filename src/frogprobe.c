@@ -7,9 +7,6 @@
 #include <frogprobe.h>
 #include <encoder.h>
 
-#define NOP_SIZE 5
-static const char big_nop[NOP_SIZE] = { 0x0f, 0x1f, 0x44, 0x00, 0x00 };
-
 void *module_alloc_around_call(void *addr, int size)
 {
     unsigned long call_range = 0x7fffffff; // ±31bit offset
