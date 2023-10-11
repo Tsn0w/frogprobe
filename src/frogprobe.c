@@ -7,6 +7,59 @@
 #include <frogprobe.h>
 #include <encoder.h>
 
+#define FROGPROBE_HASH_BITS 6
+#define FROGPROBE_TABLE_SIZE (1 << FROGPROBE_HASH_BITS)
+
+struct frogprobe_context_s {
+    struct hlist_head table[FROGPROBE_TABLE_SIZE];
+    struct mutex lock;
+} fp_context = {
+    .lock = __MUTEX_INITIALIZER(fp_context.lock),
+};
+
+void add_frogprobe_to_table(frogprobe_t *fp)
+{
+    int hash_idx = hash_ptr(fp->address, FROGPROBE_HASH_BITS);
+    INIT_HLIST_NODE(&fp->hlist);
+
+    mutex_lock(&fp_context.lock);
+    hlist_add_head_rcu(&fp->hlist, &fp_context.table[hash_idx]);
+    mutex_unlock(&fp_context.lock);
+}
+
+void remove_frogprobe_from_table(frogprobe_t *fp)
+{
+    mutex_lock(&fp_context.lock);
+    hlist_del_rcu(&fp->hlist);
+    mutex_unlock(&fp_context.lock);
+}
+
+bool is_symbol_frogprobed_unsafe(frogprobe_t *fp)
+{
+    int hash_idx = hash_ptr(fp->address, FROGPROBE_HASH_BITS);
+    struct hlist_head *head = &fp_context.table[hash_idx];
+    frogprobe_t *curr;
+
+    hlist_for_each_entry_rcu(curr, head, hlist) {
+        if (fp->address == curr->address) {
+            return true;
+        }
+    }
+    return false;
+}
+
+bool is_symbol_frogprobed(frogprobe_t *fp)
+{
+    // no symbol address -> not in table
+    if (!fp->address)
+        return false;
+
+    mutex_lock(&fp_context.lock);
+    bool rc = is_symbol_frogprobed_unsafe(fp);
+    mutex_unlock(&fp_context.lock);
+    return rc;
+}
+
 void *module_alloc_around_call(void *addr, int size)
 {
     unsigned long call_range = 0x7fffffff; // ±31bit offset
@@ -181,6 +234,10 @@ int register_frogprobe(frogprobe_t *fp)
         return -EINVAL;
     }
 
+    if (is_symbol_frogprobed(fp)) {
+        return -EBUSY;
+    }
+
     // validate if there is enough space for our trampoline (as done in kprobe + ftrace)
     // if already kprobed won't support now
     if (memcmp(fp->address, big_nop, NOP_SIZE)) {
@@ -193,17 +250,21 @@ int register_frogprobe(frogprobe_t *fp)
 
     char opcode[CALL_SIZE] = { 0xe8, 0x00, 0x00, 0x00, 0x00 }; // call prefix
     *(uint32_t *)(opcode + 1) = (unsigned long)fp->trampoline - (unsigned long)fp->address - CALL_SIZE;
-
     text_poke_p(fp->address, opcode, CALL_SIZE);
+
+    add_frogprobe_to_table(fp);
     return 0;
 }
 
 void unregister_frogprobe(frogprobe_t *fp)
 {
-    text_poke_p(fp->address, big_nop, NOP_SIZE);
-    vfree(fp->trampoline);
+    remove_frogprobe_from_table(fp);
 
+    text_poke_p(fp->address, big_nop, NOP_SIZE);
+
+    vfree(fp->trampoline);
+    fp->address = NULL;
     fp->trampoline = 0;
     fp->npages = 0;
-    fp->address = NULL;
+
 }
