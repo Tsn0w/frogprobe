@@ -7,7 +7,6 @@
         symbol_name ## _t *symbol_name ## _p;
 
 DECLARE_SYMBOL(text_poke);
-DECLARE_SYMBOL(stop_machine);
 DECLARE_SYMBOL(set_memory_rox);
 DECLARE_SYMBOL(__vmalloc_node_range);
 
@@ -49,7 +48,6 @@ int export_symbols(void)
 
     INIT_SYMBOL(__vmalloc_node_range);
     INIT_SYMBOL(set_memory_rox);
-    INIT_SYMBOL(stop_machine);
     INIT_SYMBOL(text_poke);
 
     return 0;

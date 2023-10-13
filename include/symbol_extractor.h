@@ -1,5 +1,4 @@
 #pragma once
-#include <linux/stop_machine.h>
 #include <linux/set_memory.h>
 #include <linux/kallsyms.h>
 #include <linux/vmalloc.h>
@@ -11,7 +10,6 @@
     extern symbol_name ## _t *symbol_name ## _p
 
 EXTERN_SYMBOL(text_poke);
-EXTERN_SYMBOL(stop_machine);
 EXTERN_SYMBOL(set_memory_rox);
 EXTERN_SYMBOL(__vmalloc_node_range);
 EXTERN_SYMBOL(kallsyms_lookup_name);
