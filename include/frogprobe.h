@@ -27,6 +27,7 @@ typedef struct frogprobe_s {
     void *pre_handler;
     void *post_handler;
     struct hlist_node hlist;
+    struct list_head list;
 } frogprobe_t;
 
 // must be the first line of the post_handler (if whish to use)

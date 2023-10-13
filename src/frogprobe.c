@@ -60,6 +60,44 @@ bool is_symbol_frogprobed(frogprobe_t *fp)
     return rc;
 }
 
+bool is_fp_in_list(frogprobe_t *new, frogprobe_t *head)
+{
+    if (list_empty(&head->list)) {
+            return head == new;
+    } else {
+        frogprobe_t *tmp;
+        list_for_each_entry(tmp, &head->list, list) {
+            if (new == tmp) {
+                return true;
+            }
+        }
+    }
+    return false;
+}
+
+bool is_rereg_probe_unsafe(frogprobe_t *fp)
+{
+    int hash_idx = hash_ptr(fp->address, FROGPROBE_HASH_BITS);
+    struct hlist_head *head = &fp_context.table[hash_idx];
+    frogprobe_t *curr;
+
+    hlist_for_each_entry_rcu(curr, head, hlist) {
+        if (fp->address == curr->address) {
+            return is_fp_in_list(fp, curr);
+        }
+    }
+    return false;
+
+}
+
+bool is_rereg_probe(frogprobe_t *fp)
+{
+    mutex_lock(&fp_context.lock);
+    bool rc = is_rereg_probe_unsafe(fp);
+    mutex_unlock(&fp_context.lock);
+    return rc;
+}
+
 void *module_alloc_around_call(void *addr, int size)
 {
     unsigned long call_range = 0x7fffffff; // ±31bit offset
@@ -240,7 +278,10 @@ int register_frogprobe(frogprobe_t *fp)
         return -EINVAL;
     }
 
-    if (is_symbol_frogprobed(fp)) {
+    if (is_rereg_probe(fp)) {
+        return -EINVAL;
+
+    } else if (is_symbol_frogprobed(fp)) {
         return -EBUSY;
     }
 
@@ -258,6 +299,7 @@ int register_frogprobe(frogprobe_t *fp)
     *(uint32_t *)(opcode + 1) = (unsigned long)fp->trampoline - (unsigned long)fp->address - CALL_SIZE;
     text_poke_p(fp->address, opcode, CALL_SIZE);
 
+    INIT_LIST_HEAD(&fp->list);
     add_frogprobe_to_table(fp);
     return 0;
 }
