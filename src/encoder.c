@@ -98,3 +98,22 @@ void encode_mov_rax_to_rsp_offset(char *trampoline, int *offset, int rsp_offset)
     trampoline[*offset + MOV_RAX_TO_RSP_PREFIX_SIZE] = (rsp_offset & 0xff);
     *offset += MOV_RAX_TO_RSP_BASE_SIZE;
 }
+
+void encode_mov_from_stack_offset_calling_conventions_regs(char *trampoline,
+                                                           int *offset,
+                                                           int stack_offset)
+{
+    static const char mov_regs_from_rsp_offset[MOV_CC_REGS_FROM_STACK] = {
+        0x4c, 0x8b, 0x54, 0x24, 0x18, // mov r10, [rsp + 0x18]
+        0x4c, 0x8b, 0x4c, 0x24, 0x20, // mov r9, [rsp + 0x10]
+        0x4c, 0x8b, 0x44, 0x24, 0x28, // mov r8, [rsp + 0x28]
+        0x48, 0x8b, 0x4c, 0x24, 0x30, // mov rcx, [rsp + 0x30]
+        0x48, 0x8b, 0x54, 0x24, 0x38, // mov rdx, [rsp + 0x38]
+        0x48, 0x8b, 0x74, 0x24, 0x40, // mov rsi, [rsp + 0x40]
+        0x48, 0x8b, 0x7c, 0x24, 0x48, // mov rdi, [rsp + 0x48]
+    };
+
+    memcpy(trampoline + *offset, mov_regs_from_rsp_offset, MOV_CC_REGS_FROM_STACK);
+    *offset += MOV_CC_REGS_FROM_STACK;
+
+}

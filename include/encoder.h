@@ -40,3 +40,9 @@ void encode_cmp_rax_imm(char *trampoline, int *offset, uint32_t imm);
 #define MOV_RAX_TO_RSP_BASE_SIZE 5
 #define MOV_RAX_TO_RSP_PREFIX_SIZE 4
 void encode_mov_rax_to_rsp_offset(char *trampoline, int *offset, int rsp_offset);
+
+#define MOV_MEM_OFFSET_TO_REG_SIZE 5
+#define MOV_CC_REGS_FROM_STACK (7 * MOV_MEM_OFFSET_TO_REG_SIZE)
+void encode_mov_from_stack_offset_calling_conventions_regs(char *trampoline,
+                                                           int *offset,
+                                                           int stack_offset);
