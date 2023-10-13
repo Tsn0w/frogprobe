@@ -202,11 +202,8 @@ unsigned long frogprobe_pre_handler_ex(unsigned long addr, frogprobe_regs_t *reg
     frogprobe_t *fp = get_frogprobe((void *)(addr - CALL_SIZE));
     // TODO: should never fail?
 
-    // Only one frogprobe at this address
-    if (list_empty(&fp->list)) {
-        return fp->pre_handler(regs->rdi, regs->rsi, regs->rdx, regs->rcx,
-                               regs->r8,  regs->r9);
-    } else {
+    unsigned long rc;
+    if (!list_empty(&fp->list)) {
         frogprobe_t *tmp;
         list_for_each_entry(tmp, &fp->list, list) {
             unsigned long rc = tmp->pre_handler(regs->rdi, regs->rsi, regs->rdx,
@@ -215,6 +212,13 @@ unsigned long frogprobe_pre_handler_ex(unsigned long addr, frogprobe_regs_t *reg
                 return rc;
             }
         }
+    }
+
+    // run found last, since hlist return the last added element
+    rc = fp->pre_handler(regs->rdi, regs->rsi, regs->rdx, regs->rcx,
+                         regs->r8,  regs->r9);
+    if (rc) { /* redirect original (meaning not running original function) */
+        return rc;
     }
 
     return 0;
@@ -342,7 +346,13 @@ int register_frogprobe(frogprobe_t *fp)
         return -EINVAL;
 
     } else if (is_symbol_frogprobed(fp)) {
-        return -EBUSY;
+        frogprobe_t *first_fp = get_frogprobe(fp->address);
+        // TODO: should never fail?
+        list_add(&fp->list, &first_fp->list);
+        add_frogprobe_to_table(fp);
+        fp->trampoline = first_fp->trampoline;
+        fp->npages = first_fp->npages;
+        return 0;
     }
 
     // validate if there is enough space for our trampoline (as done in kprobe + ftrace)
@@ -355,24 +365,29 @@ int register_frogprobe(frogprobe_t *fp)
         return -ENOMEM;
     }
 
+    INIT_LIST_HEAD(&fp->list);
+    add_frogprobe_to_table(fp);
+
     char opcode[CALL_SIZE] = { 0xe8, 0x00, 0x00, 0x00, 0x00 }; // call prefix
     *(uint32_t *)(opcode + 1) = (unsigned long)fp->trampoline - (unsigned long)fp->address - CALL_SIZE;
     text_poke_p(fp->address, opcode, CALL_SIZE);
 
-    INIT_LIST_HEAD(&fp->list);
-    add_frogprobe_to_table(fp);
     return 0;
 }
 
 void unregister_frogprobe(frogprobe_t *fp)
 {
+
     remove_frogprobe_from_table(fp);
 
-    text_poke_p(fp->address, big_nop, NOP_SIZE);
+    if (list_empty(&fp->list)) {
+        text_poke_p(fp->address, big_nop, NOP_SIZE);
+        vfree(fp->trampoline);
+    } else {
+        list_del(&fp->list);
+    }
 
-    vfree(fp->trampoline);
     fp->address = NULL;
     fp->trampoline = 0;
     fp->npages = 0;
-
 }
