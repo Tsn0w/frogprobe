@@ -117,3 +117,27 @@ void encode_mov_from_stack_offset_calling_conventions_regs(char *trampoline,
     *offset += MOV_CC_REGS_FROM_STACK;
 
 }
+
+void encode_mov_rsp_32bit_offset_to_rdi(char *trampoline, int *offset,
+                                        uint32_t stack_offset)
+{
+    static const char mov_rsp_32_offset_to_rdi[MOV_RSP_32BIT_OFFSET_TO_RDI_SIZE] = {
+        0x48, 0x8b, 0xbc, 0x24, 0x00, 0x00, 0x00, 0x00 /* mov rdi, [rsp + 0x00] */
+    };
+
+    memcpy(trampoline + *offset, mov_rsp_32_offset_to_rdi,
+           MOV_RSP_32BIT_OFFSET_TO_RDI_SIZE);
+    trampoline[*offset + MOV_32BIT_IMM_OFFSET] = stack_offset;
+    *offset += MOV_RSP_32BIT_OFFSET_TO_RDI_SIZE;
+}
+
+void encode_lea_rsi_rsp_offset(char *trampoline, int *offset, short stack_offset)
+{
+    static const char lea_rsi_rsp_offset[LEA_RSI_RSP_OFFSET_SIZE] = {
+        0x48, 0x8d, 0x74, 0x24, 0x00 /* lea rsi, [rsp + 0x0] */
+    };
+
+    memcpy(trampoline + *offset, lea_rsi_rsp_offset, LEA_RSI_RSP_OFFSET_SIZE);
+    trampoline[*offset + LES_RSI_RSP_IMM_OFFSET] = stack_offset & 0xff;
+    *offset += LEA_RSI_RSP_OFFSET_SIZE;
+}

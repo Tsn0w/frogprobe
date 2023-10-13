@@ -46,3 +46,12 @@ void encode_mov_rax_to_rsp_offset(char *trampoline, int *offset, int rsp_offset)
 void encode_mov_from_stack_offset_calling_conventions_regs(char *trampoline,
                                                            int *offset,
                                                            int stack_offset);
+
+#define MOV_32BIT_IMM_OFFSET 4
+#define MOV_RSP_32BIT_OFFSET_TO_RDI_SIZE 8
+void encode_mov_rsp_32bit_offset_to_rdi(char *trampoline, int *offset,
+                                        uint32_t stack_offset);
+
+#define LES_RSI_RSP_IMM_OFFSET 4
+#define LEA_RSI_RSP_OFFSET_SIZE 5
+void encode_lea_rsi_rsp_offset(char *trampoline, int *offset, short stack_offset);
