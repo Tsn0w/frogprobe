@@ -9,6 +9,7 @@
 
 #define FROGPROBE_HASH_BITS 6
 #define FROGPROBE_TABLE_SIZE (1 << FROGPROBE_HASH_BITS)
+#define ptr_size (sizeof(void *))
 
 struct frogprobe_context_s {
     struct hlist_head table[FROGPROBE_TABLE_SIZE];
@@ -98,6 +99,28 @@ bool is_rereg_probe(frogprobe_t *fp)
     return rc;
 }
 
+frogprobe_t *get_frogprobe_unsafe(void *address)
+{
+    int hash_idx = hash_ptr(address, FROGPROBE_HASH_BITS);
+    struct hlist_head *head = &fp_context.table[hash_idx];
+    frogprobe_t *curr;
+
+    hlist_for_each_entry_rcu(curr, head, hlist) {
+        if (address == curr->address) {
+            return curr;
+        }
+    }
+    return NULL;
+}
+
+frogprobe_t *get_frogprobe(void *address)
+{
+    mutex_lock(&fp_context.lock);
+    frogprobe_t *fp = get_frogprobe_unsafe(address);
+    mutex_unlock(&fp_context.lock);
+    return fp;
+}
+
 void *module_alloc_around_call(void *addr, int size)
 {
     unsigned long call_range = 0x7fffffff; // ±31bit offset
@@ -173,10 +196,37 @@ void prepare_post_handler_trampoline(char *tramp, int *offset, uint64_t post_han
     encode_push_r11(tramp, offset);
 }
 
+
+unsigned long frogprobe_pre_handler_ex(unsigned long addr, frogprobe_regs_t *regs)
+{
+    frogprobe_t *fp = get_frogprobe((void *)(addr - CALL_SIZE));
+    // TODO: should never fail?
+
+    // Only one frogprobe at this address
+    if (list_empty(&fp->list)) {
+        return fp->pre_handler(regs->rdi, regs->rsi, regs->rdx, regs->rcx,
+                               regs->r8,  regs->r9);
+    } else {
+        frogprobe_t *tmp;
+        list_for_each_entry(tmp, &fp->list, list) {
+            unsigned long rc = tmp->pre_handler(regs->rdi, regs->rsi, regs->rdx,
+                                                regs->rcx, regs->r8, regs->r9);
+            if (rc) { /* redirect original (meaning not running original function) */
+                return rc;
+            }
+        }
+    }
+
+    return 0;
+}
+
+
 /*
  * Create the stub:
  * (post_handler logic if needed)
  *  push rdi, rsi, rdx, rcx, r8, r9, r10 (remove if post hanlder)
+ *  mov rdi, [rsp + 7 * ptr_size] (chagned to 0 if post_handler)
+ *  lea rsi, [rsp + 0] (changed to 3 * ptr_size if post_handler)
  *  call [rip + pre_handler_offset]
  *  pop r10, r9, r8, rcx, rdx, rsi, rdi (switch with mov if post_handler)
  *  cmp rax, 0x0
@@ -191,9 +241,11 @@ void prepare_post_handler_trampoline(char *tramp, int *offset, uint64_t post_han
 bool create_trampoline(frogprobe_t *fp)
 {
     bool is_post_handler = fp->post_handler ? true : false;
-    int stub_size = PUSH_CALL_CONVENTIONS_REGS_SIZE + RIP_REL_CALL_SIZE +
-                    POP_CALL_CONVENTIONS_REGS_SIZE +  CMP_RAX_IMM +
-                    BYTE_REL_JUMP_SIZE + MOV_RAX_TO_RSP_BASE_SIZE + RETQ_SIZE + 8 +
+    int stub_size = PUSH_CALL_CONVENTIONS_REGS_SIZE +
+                    MOV_RSP_32BIT_OFFSET_TO_RDI_SIZE + LEA_RSI_RSP_OFFSET_SIZE +
+                    RIP_REL_CALL_SIZE + POP_CALL_CONVENTIONS_REGS_SIZE +
+                    CMP_RAX_IMM + BYTE_REL_JUMP_SIZE + MOV_RAX_TO_RSP_BASE_SIZE +
+                    RETQ_SIZE + ptr_size +
                     (is_post_handler ? (POST_HANDLER_PREP_SIZE -
                                         PUSH_CALL_CONVENTIONS_REGS_SIZE -
                                         POP_CALL_CONVENTIONS_REGS_SIZE +
@@ -205,15 +257,21 @@ bool create_trampoline(frogprobe_t *fp)
 
     int offset = 0;
     if (is_post_handler) {
+        // for imm -> see @prepare_post_handler_trampoline draw to see rsp offset from cc-regs
+        int cc_regs_offset = 3 * ptr_size;
         prepare_post_handler_trampoline(trampoline, &offset, (uint64_t)fp->post_handler);
+        encode_mov_rsp_32bit_offset_to_rdi(trampoline, &offset, 0);
+        encode_lea_rsi_rsp_offset(trampoline, &offset, cc_regs_offset);
         encode_relative_call(trampoline, &offset,
-                             (uint64_t)(trampoline + stub_size - 8));
-        // 0x18 -> see @prepare_post_handler_trampoline draw to see rsp offset from cc-regs
-        encode_mov_from_stack_offset_calling_conventions_regs(trampoline, &offset, 0x18);
+                             (uint64_t)(trampoline + stub_size - ptr_size));
+        encode_mov_from_stack_offset_calling_conventions_regs(trampoline, &offset,
+                                                              cc_regs_offset);
     } else {
         encode_push_calling_conventions_regs(trampoline, &offset);
+        encode_mov_rsp_32bit_offset_to_rdi(trampoline, &offset, ptr_size * 7);
+        encode_lea_rsi_rsp_offset(trampoline, &offset, 0);
         encode_relative_call(trampoline, &offset,
-                             (uint64_t)(trampoline + stub_size - 8));
+                             (uint64_t)(trampoline + stub_size - ptr_size));
         encode_pop_calling_conventions_regs(trampoline, &offset);
     }
 
@@ -225,7 +283,7 @@ bool create_trampoline(frogprobe_t *fp)
 
     encode_retq(trampoline, &offset);
 
-    *(uint64_t *)(trampoline + offset) = (uint64_t)fp->pre_handler;
+    *(uint64_t *)(trampoline + offset) = (uint64_t)frogprobe_pre_handler_ex;
 
     int npages = DIV_ROUND_UP(stub_size, PAGE_SIZE);
     set_memory_rox_p((unsigned long)trampoline, npages);
@@ -259,6 +317,8 @@ bool create_trampoline(frogprobe_t *fp)
  *   |                  --------------------------------------
  *    ---------------->| prepare post handler logic (if need) |
  *                     |              push regs               |
+ *                     |          set rdi, fp->addr + 5       |
+ *                     |            set rsi fp_regs           |
  *                     |    call [rip + pre_handler_offset]   |
  *                     |               pop regs               |
  *                     |     logic to change rc (if need)     |
