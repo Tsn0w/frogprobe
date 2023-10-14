@@ -5,6 +5,13 @@
 #define RET_INSN 0xc3
 #define INT3_INSN 0xcc
 
+void encode_call(char *target, char *base, char *dest)
+{
+    char opcode[CALL_SIZE] = { 0xe8, 0x00, 0x00, 0x00, 0x00 }; // call prefix
+    *(uint32_t *)(opcode + 1) = (unsigned long)base - (unsigned long)dest - CALL_SIZE;
+    memcpy(target, opcode, CALL_SIZE);
+
+}
 void encode_relative_call(char *trampoline, int *offset, uint64_t dest)
 {
     uint32_t rel_off = (uint32_t)(dest - RIP_REL_CALL_SIZE -
@@ -72,6 +79,12 @@ void encode_pop_r11(char *trampoline, int *offset)
     trampoline[*offset] = 0x41;
     trampoline[*offset + 1] = 0x5b;
     *offset += POP_R11_SIZE;
+}
+
+bool is_insn_pop_r11(char *trampoline)
+{
+    static const char pop_r11[POP_R11_SIZE] = { 0x41, 0x5b };
+    return memcmp(trampoline, pop_r11, POP_R11_SIZE);
 }
 
 void encode_push_r11(char *trampoline, int *offset)

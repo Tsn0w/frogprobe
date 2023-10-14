@@ -3,6 +3,7 @@
 #include <linux/types.h>
 
 #define CALL_SIZE 5
+void encode_call(char *target, char *base, char *dest);
 
 #define NOP_SIZE 5
 static const char big_nop[NOP_SIZE] = { 0x0f, 0x1f, 0x44, 0x00, 0x00 };
@@ -30,6 +31,7 @@ void encode_push_rax(char *trampoline, int *offset);
 
 #define POP_R11_SIZE 2
 void encode_pop_r11(char *trampoline, int *offset);
+bool is_insn_pop_r11(char *addr);
 
 #define PUSH_R11_SIZE 2
 void encode_push_r11(char *trampoline, int *offset);
