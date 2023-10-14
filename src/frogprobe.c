@@ -312,6 +312,48 @@ bool create_trampoline(frogprobe_t *fp)
     return true;
 }
 
+bool trampoline_prepared_for_post(frogprobe_t *first)
+{
+    return !is_insn_pop_r11(first->trampoline);
+}
+
+int register_another_frogprobe(frogprobe_t *fp)
+{
+    frogprobe_t *first_fp = get_frogprobe(fp->address);
+    // TODO: should never fail?
+
+    // first time we encouter a frogprobe on this symbol with post_handler
+    // re-create trampoline with post_handler and update list
+    // once we ready for post_handler, we will always be
+    if (fp->post_handler && !trampoline_prepared_for_post(first_fp)) {
+        if (!create_trampoline(fp)) {
+            return -ENOMEM;
+        }
+
+        frogprobe_t *tmp;
+        char *old_tramp = first_fp->trampoline;
+
+        first_fp->trampoline = fp->trampoline;
+        first_fp->npages = fp->npages;
+        list_for_each_entry(tmp, &first_fp->list, list) {
+            tmp->trampoline = fp->trampoline;
+            tmp->npages = fp->npages;
+        }
+
+        char opcode[CALL_SIZE] = {0};
+        encode_call(opcode, fp->trampoline, fp->address);
+        text_poke_p(fp->address, opcode, CALL_SIZE);
+        vfree(old_tramp);
+    } else {
+        fp->trampoline = first_fp->trampoline;
+        fp->npages = first_fp->npages;
+    }
+
+    list_add(&fp->list, &first_fp->list);
+    add_frogprobe_to_table(fp);
+    return 0;
+}
+
 /*
  * Register hook (frogprobe) on address for symbol given (fp->symbol) only if
  * the symbol is kprobeable using ftrace (meaning starts with 1 big nop)
@@ -366,13 +408,7 @@ int register_frogprobe(frogprobe_t *fp)
         return -EINVAL;
 
     } else if (is_symbol_frogprobed(fp)) {
-        frogprobe_t *first_fp = get_frogprobe(fp->address);
-        // TODO: should never fail?
-        list_add(&fp->list, &first_fp->list);
-        add_frogprobe_to_table(fp);
-        fp->trampoline = first_fp->trampoline;
-        fp->npages = first_fp->npages;
-        return 0;
+        return register_another_frogprobe(fp);
     }
 
     // validate if there is enough space for our trampoline (as done in kprobe + ftrace)
@@ -388,10 +424,9 @@ int register_frogprobe(frogprobe_t *fp)
     INIT_LIST_HEAD(&fp->list);
     add_frogprobe_to_table(fp);
 
-    char opcode[CALL_SIZE] = { 0xe8, 0x00, 0x00, 0x00, 0x00 }; // call prefix
-    *(uint32_t *)(opcode + 1) = (unsigned long)fp->trampoline - (unsigned long)fp->address - CALL_SIZE;
+    char opcode[CALL_SIZE] = {0};
+    encode_call(opcode, fp->trampoline, fp->address);
     text_poke_p(fp->address, opcode, CALL_SIZE);
-
     return 0;
 }
 
