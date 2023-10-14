@@ -6,7 +6,6 @@ frogprobe - like x86_64 kprobe but you can sleep in it
 - Funcitons that already kprobes
 
 ## TODO:
-- [ ] Wrap with (rcu?) locks kprobe list (same address) operations
 - [ ] Add optimization option to pass number of arguments function has
 - [ ] Support Kprobed (as much as possible)
 - [ ] speed up trampoline stubs (siwtch call + ret to 2 jmp, instead rip rel call, movabs + call, ....) and test if really helps

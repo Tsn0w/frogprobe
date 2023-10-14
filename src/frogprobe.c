@@ -1,6 +1,7 @@
 #include <asm-generic/errno-base.h>
 
 #include <linux/moduleloader.h>
+#include <linux/rculist.h>
 
 #include <symbol_extractor.h>
 #include <frogprobe.h>
@@ -12,18 +13,23 @@
 
 struct frogprobe_context_s {
     struct hlist_head table[FROGPROBE_TABLE_SIZE];
-    struct mutex lock;
+    struct mutex lock; /* lock both table and the frogprobe list */
 } fp_context = {
     .lock = __MUTEX_INITIALIZER(fp_context.lock),
 };
 
-void add_frogprobe_to_table(frogprobe_t *fp)
+void add_frogprobe_to_table_unsafe(frogprobe_t *fp)
 {
     int hash_idx = hash_ptr(fp->address, FROGPROBE_HASH_BITS);
     INIT_HLIST_NODE(&fp->hlist);
 
-    mutex_lock(&fp_context.lock);
     hlist_add_head_rcu(&fp->hlist, &fp_context.table[hash_idx]);
+}
+
+void add_frogprobe_to_table(frogprobe_t *fp)
+{
+    mutex_lock(&fp_context.lock);
+    add_frogprobe_to_table_unsafe(fp);
     mutex_unlock(&fp_context.lock);
 }
 
@@ -54,19 +60,19 @@ bool is_symbol_frogprobed(frogprobe_t *fp)
     if (!fp->address)
         return false;
 
-    mutex_lock(&fp_context.lock);
+    rcu_read_lock();
     bool rc = is_symbol_frogprobed_unsafe(fp);
-    mutex_unlock(&fp_context.lock);
+    rcu_read_unlock();
     return rc;
 }
 
-bool is_fp_in_list(frogprobe_t *new, frogprobe_t *head)
+bool is_fp_in_list_unsafe(frogprobe_t *new, frogprobe_t *head)
 {
     if (list_empty(&head->list)) {
             return head == new;
     } else {
         frogprobe_t *tmp;
-        list_for_each_entry(tmp, &head->list, list) {
+        list_for_each_entry_rcu(tmp, &head->list, list) {
             if (new == tmp) {
                 return true;
             }
@@ -83,7 +89,7 @@ bool is_rereg_probe_unsafe(frogprobe_t *fp)
 
     hlist_for_each_entry_rcu(curr, head, hlist) {
         if (fp->address == curr->address) {
-            return is_fp_in_list(fp, curr);
+            return is_fp_in_list_unsafe(fp, curr);
         }
     }
     return false;
@@ -92,9 +98,9 @@ bool is_rereg_probe_unsafe(frogprobe_t *fp)
 
 bool is_rereg_probe(frogprobe_t *fp)
 {
-    mutex_lock(&fp_context.lock);
+    rcu_read_lock();
     bool rc = is_rereg_probe_unsafe(fp);
-    mutex_unlock(&fp_context.lock);
+    rcu_read_unlock();
     return rc;
 }
 
@@ -114,9 +120,9 @@ frogprobe_t *get_frogprobe_unsafe(void *address)
 
 frogprobe_t *get_frogprobe(void *address)
 {
-    mutex_lock(&fp_context.lock);
+    rcu_read_lock();
     frogprobe_t *fp = get_frogprobe_unsafe(address);
-    mutex_unlock(&fp_context.lock);
+    rcu_read_unlock();
     return fp;
 }
 
@@ -133,18 +139,20 @@ void *module_alloc_around_call(void *addr, int size)
 void frogprobe_post_handler_caller(unsigned long addr, frogprobe_regs_t *regs,
                                    unsigned long rc)
 {
-    frogprobe_t *fp = get_frogprobe((void *)(addr - CALL_SIZE));
+    rcu_read_lock();
+    frogprobe_t *fp = get_frogprobe_unsafe((void *)(addr - CALL_SIZE));
     // TODO: should never fail?
 
     if (!list_empty(&fp->list)) {
         frogprobe_t *tmp;
-        list_for_each_entry(tmp, &fp->list, list) {
+        list_for_each_entry_rcu(tmp, &fp->list, list) {
             if (tmp->post_handler) {
                 tmp->post_handler(rc, regs->rdi, regs->rsi, regs->rdx, regs->rcx,
                                   regs->r8, regs->r9);
             }
         }
     }
+    rcu_read_unlock();
 
     if (fp->post_handler) {
         // run found last, since hlist return the last added element
@@ -215,20 +223,23 @@ void prepare_post_handler_trampoline(char *tramp, int *offset, uint64_t post_han
 
 unsigned long frogprobe_pre_handler_ex(unsigned long addr, frogprobe_regs_t *regs)
 {
-    frogprobe_t *fp = get_frogprobe((void *)(addr - CALL_SIZE));
+    rcu_read_lock();
+    frogprobe_t *fp = get_frogprobe_unsafe((void *)(addr - CALL_SIZE));
     // TODO: should never fail?
 
     if (!list_empty(&fp->list)) {
         frogprobe_t *tmp;
-        list_for_each_entry(tmp, &fp->list, list) {
+        list_for_each_entry_rcu(tmp, &fp->list, list) {
             if (!tmp->pre_handler) { continue; }
             unsigned long rc = tmp->pre_handler(regs->rdi, regs->rsi, regs->rdx,
                                                 regs->rcx, regs->r8, regs->r9);
             if (rc) { /* redirect original (meaning not running original function) */
+                rcu_read_unlock();
                 return rc;
             }
         }
     }
+    rcu_read_unlock();
 
     if (!fp->pre_handler) {
         return 0;
@@ -335,10 +346,12 @@ int register_another_frogprobe(frogprobe_t *fp)
 
         first_fp->trampoline = fp->trampoline;
         first_fp->npages = fp->npages;
-        list_for_each_entry(tmp, &first_fp->list, list) {
+        rcu_read_lock();
+        list_for_each_entry_rcu(tmp, &first_fp->list, list) {
             tmp->trampoline = fp->trampoline;
             tmp->npages = fp->npages;
         }
+        rcu_read_unlock();
 
         char opcode[CALL_SIZE] = {0};
         encode_call(opcode, fp->trampoline, fp->address);
@@ -349,8 +362,10 @@ int register_another_frogprobe(frogprobe_t *fp)
         fp->npages = first_fp->npages;
     }
 
-    list_add(&fp->list, &first_fp->list);
-    add_frogprobe_to_table(fp);
+    mutex_lock(&fp_context.lock);
+    list_add_rcu(&fp->list, &first_fp->list);
+    add_frogprobe_to_table_unsafe(fp);
+    mutex_unlock(&fp_context.lock);
     return 0;
 }
 
@@ -439,7 +454,9 @@ void unregister_frogprobe(frogprobe_t *fp)
         text_poke_p(fp->address, big_nop, NOP_SIZE);
         vfree(fp->trampoline);
     } else {
-        list_del(&fp->list);
+        mutex_lock(&fp_context.lock);
+        list_del_rcu(&fp->list);
+        mutex_unlock(&fp_context.lock);
     }
 
     fp->address = NULL;
