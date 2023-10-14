@@ -12,9 +12,9 @@
  *  pre_handler -> address returned at pre_handler -> post_handler
  *
  * Multiple frogprobes:
- * Currently supported only at pre_handler.
- * pre handlers are called in the order they were registered, but if one wish to
- * change the flow (return != 0), the follow will not run.
+ * post and pre handlers are called in the order they were registered,
+ * but if one wish to change the flow (return != 0), the next pre handlers will
+ * not run. (only at pre-handlers, post_handlers runs always)
  *
  * when register a frogprobe one need the following:
  *  - pre/post_handler: the handler to be called before the function execute
@@ -22,6 +22,7 @@
  *
  * Known limitations:
  * - Doesn't support functions with args on stack
+ * - Doesn't work with kprobe
  */
 
 typedef unsigned long (frogprobe_pre_handler_t)(unsigned long rdi, unsigned long rsi,

@@ -384,7 +384,7 @@ int register_another_frogprobe(frogprobe_t *fp)
  *                     |               pop regs               |
  *                     |     logic to change rc (if need)     |
  *                     |               ret; int3              |
- * pre_handler_offset: |           fp->post_handler           |
+ * pre_handler_offset: |       frogprobe_pre_handler_ex       |
  *                      --------------------------------------
  *
  */
