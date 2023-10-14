@@ -139,13 +139,18 @@ void frogprobe_post_handler_caller(unsigned long addr, frogprobe_regs_t *regs,
     if (!list_empty(&fp->list)) {
         frogprobe_t *tmp;
         list_for_each_entry(tmp, &fp->list, list) {
-            tmp->post_handler(rc, regs->rdi, regs->rsi, regs->rdx, regs->rcx,
-                              regs->r8, regs->r9);
+            if (tmp->post_handler) {
+                tmp->post_handler(rc, regs->rdi, regs->rsi, regs->rdx, regs->rcx,
+                                  regs->r8, regs->r9);
+            }
         }
     }
 
-    // run found last, since hlist return the last added element
-    fp->post_handler(rc, regs->rdi, regs->rsi, regs->rdx, regs->rcx, regs->r8,  regs->r9);
+    if (fp->post_handler) {
+        // run found last, since hlist return the last added element
+        fp->post_handler(rc, regs->rdi, regs->rsi, regs->rdx, regs->rcx, regs->r8,
+                         regs->r9);
+    }
 }
 
 extern void frogprobe_post_handler_ex(void);
@@ -213,10 +218,10 @@ unsigned long frogprobe_pre_handler_ex(unsigned long addr, frogprobe_regs_t *reg
     frogprobe_t *fp = get_frogprobe((void *)(addr - CALL_SIZE));
     // TODO: should never fail?
 
-    unsigned long rc;
     if (!list_empty(&fp->list)) {
         frogprobe_t *tmp;
         list_for_each_entry(tmp, &fp->list, list) {
+            if (!tmp->pre_handler) { continue; }
             unsigned long rc = tmp->pre_handler(regs->rdi, regs->rsi, regs->rdx,
                                                 regs->rcx, regs->r8, regs->r9);
             if (rc) { /* redirect original (meaning not running original function) */
@@ -225,14 +230,13 @@ unsigned long frogprobe_pre_handler_ex(unsigned long addr, frogprobe_regs_t *reg
         }
     }
 
-    // run found last, since hlist return the last added element
-    rc = fp->pre_handler(regs->rdi, regs->rsi, regs->rdx, regs->rcx,
-                         regs->r8,  regs->r9);
-    if (rc) { /* redirect original (meaning not running original function) */
-        return rc;
+    if (!fp->pre_handler) {
+        return 0;
     }
 
-    return 0;
+    // run found last, since hlist return the last added element
+    return fp->pre_handler(regs->rdi, regs->rsi, regs->rdx, regs->rcx,
+                           regs->r8,  regs->r9);
 }
 
 
@@ -344,7 +348,12 @@ bool create_trampoline(frogprobe_t *fp)
  */
 int register_frogprobe(frogprobe_t *fp)
 {
-    if (!fp || !fp->symbol_name || !fp->pre_handler) {
+    if (!fp || !fp->symbol_name) {
+        return -EINVAL;
+    }
+
+    // must be at least one handler
+    if (!fp->pre_handler && !fp->post_handler) {
         return -EINVAL;
     }
 
