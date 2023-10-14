@@ -20,12 +20,11 @@ static void *pre_handler(bool wait, const char *fmt)
     return (void *)&function_replacement;
 }
 
-static void post_handler(bool wait, const char *fmt)
+// type of rc should be the type return by the function
+// https://elixir.bootlin.com/linux/latest/source/kernel/module/kmod.c#L132
+static void post_handler(int rc, bool wait, const char *fmt)
 {
-    // must be the first line of the post_handler
-    get_return_value(orig_rc);
-
-    printk(KERN_INFO"called __request_module pre with fmt: %s! (rc: %lu)\n", fmt, orig_rc);
+    printk(KERN_INFO"called __request_module post with fmt: %s! (rc: %d)\n", fmt, rc);
 }
 
 static frogprobe_t __request_module_probe = {

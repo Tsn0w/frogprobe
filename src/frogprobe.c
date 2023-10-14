@@ -1,7 +1,6 @@
 #include <asm-generic/errno-base.h>
 
 #include <linux/moduleloader.h>
-#include <linux/printk.h>
 
 #include <symbol_extractor.h>
 #include <frogprobe.h>
@@ -131,21 +130,35 @@ void *module_alloc_around_call(void *addr, int size)
                                    NUMA_NO_NODE, __builtin_return_address(0));
 }
 
+void frogprobe_post_handler_caller(unsigned long addr, frogprobe_regs_t *regs,
+                                   unsigned long rc)
+{
+    frogprobe_t *fp = get_frogprobe((void *)(addr - CALL_SIZE));
+    // TODO: should never fail?
+
+    if (!list_empty(&fp->list)) {
+        frogprobe_t *tmp;
+        list_for_each_entry(tmp, &fp->list, list) {
+            tmp->post_handler(rc, regs->rdi, regs->rsi, regs->rdx, regs->rcx,
+                              regs->r8, regs->r9);
+        }
+    }
+
+    // run found last, since hlist return the last added element
+    fp->post_handler(rc, regs->rdi, regs->rsi, regs->rdx, regs->rcx, regs->r8,  regs->r9);
+}
+
 extern void frogprobe_post_handler_ex(void);
 __asm__(
 "frogprobe_post_handler_ex:"
 ".intel_syntax;"
-    "pop %r11;"
-    "pop %r10;"
-    "pop %r9;"
-    "pop %r8;"
-    "pop %rcx;"
-    "pop %rdx;"
-    "pop %rsi;"
     "pop %rdi;"
+    "mov %rsi, %rsp;"
+    "mov %rdx, %rax;"
     "push %rax;" // save original return value
-    "call %r11;"
+    "call frogprobe_post_handler_caller;"
     "pop %rax;"
+    "add %rsp, 0x38;" // clean stack from cc-regs
     "ret; int3;"
 ".att_syntax;"
 );
@@ -155,11 +168,10 @@ __asm__(
  * without affect the normal flow
  * rax + r11 are free to use (https://en.wikipedia.org/wiki/X86_calling_conventions#System_V_AMD64_ABI)
  * Stub post_handler logic is:
- *  movabs rax, post_handler
  *  pop r11
  *  push rdi, rsi, rdx, rcx, r8, r9, r10 (instead of the pushes in the base trampoline)
- *  push rax
  *  movabs rax, frogprobe_post_handler_ex
+ *  push r11
  *  push rax
  *  push r11
  *
@@ -173,25 +185,24 @@ __asm__(
  *          -------------------------------------
  *         |       original return address       |
  *         |       calling conventions regs      |
- *         |           fp->post_handler          |
- *         |       frogprobe_post_handler_ex     |
  *         |             fp->addr + 5            |
+ *         |       frogprobe_post_handler_ex     |
+ *         |             fp->addr + 5            | <-- frogpore_post_handler_ex can't use this
  *          -------------------------------------
  *
  * The idea is to save the calling-conventions registers for later use (post_handler)
  * after the function probed runs, it will return to frogprobe_post_handler_ex
  * which will restore the registers and call post_handler.
  */
-#define POST_HANDLER_PREP_SIZE (MOVABS_RAX_SIZE + POP_R11_SIZE + PUSH_RAX_SIZE +    \
-                                MOVABS_RAX_SIZE + PUSH_CALL_CONVENTIONS_REGS_SIZE + \
-                                PUSH_RAX_SIZE + PUSH_R11_SIZE)
+#define POST_HANDLER_PREP_SIZE (POP_R11_SIZE + PUSH_CALL_CONVENTIONS_REGS_SIZE  +  \
+                                MOVABS_RAX_SIZE + PUSH_R11_SIZE +  PUSH_RAX_SIZE + \
+                                PUSH_R11_SIZE)
 void prepare_post_handler_trampoline(char *tramp, int *offset, uint64_t post_handler)
 {
-    encode_movabs_rax(tramp, offset, post_handler);
     encode_pop_r11(tramp, offset);
     encode_push_calling_conventions_regs(tramp, offset);
-    encode_push_rax(tramp, offset);
     encode_movabs_rax(tramp, offset, (uint64_t)&frogprobe_post_handler_ex);
+    encode_push_r11(tramp, offset);
     encode_push_rax(tramp, offset);
     encode_push_r11(tramp, offset);
 }
@@ -321,7 +332,7 @@ bool create_trampoline(frogprobe_t *fp)
  *   |                  --------------------------------------
  *    ---------------->| prepare post handler logic (if need) |
  *                     |              push regs               |
- *                     |          set rdi, fp->addr + 5       |
+ *                     |          set rdi fp->addr + 5        |
  *                     |            set rsi fp_regs           |
  *                     |    call [rip + pre_handler_offset]   |
  *                     |               pop regs               |
