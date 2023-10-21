@@ -1,4 +1,7 @@
 #pragma once
+
+#include <linux/refcount.h>
+
 /*
  * frogprobe is I/S for hooking kernel functions just like kprobe with the ability to
  * sleep in it, currently kprobe are working with percpu variables (current_kprobe).
@@ -42,6 +45,7 @@ typedef struct frogprobe_s {
     frogprobe_post_handler_t *post_handler;
     struct hlist_node hlist;
     struct list_head list;
+    refcount_t refcnt;
 } frogprobe_t;
 
 typedef struct frogprobe_regs_s {

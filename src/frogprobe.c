@@ -127,6 +127,15 @@ void *module_alloc_around_call(void *addr, int size)
                                    NUMA_NO_NODE, __builtin_return_address(0));
 }
 
+void call_post_handler(frogprobe_t *fp, frogprobe_regs_t *regs, unsigned long rc)
+{
+    refcount_inc(&fp->refcnt);
+    fp->post_handler(rc, regs->rdi, regs->rsi, regs->rdx, regs->rcx, regs->r8,
+                     regs->r9);
+    refcount_dec(&fp->refcnt);
+
+}
+
 void frogprobe_post_handler_caller(unsigned long addr, frogprobe_regs_t *regs,
                                    unsigned long rc)
 {
@@ -138,8 +147,7 @@ void frogprobe_post_handler_caller(unsigned long addr, frogprobe_regs_t *regs,
         frogprobe_t *tmp;
         list_for_each_entry_rcu(tmp, &fp->list, list) {
             if (tmp->post_handler) {
-                tmp->post_handler(rc, regs->rdi, regs->rsi, regs->rdx, regs->rcx,
-                                  regs->r8, regs->r9);
+                call_post_handler(tmp, regs, rc);
             }
         }
     }
@@ -147,8 +155,7 @@ void frogprobe_post_handler_caller(unsigned long addr, frogprobe_regs_t *regs,
 
     if (fp->post_handler) {
         // run found last, since hlist return the last added element
-        fp->post_handler(rc, regs->rdi, regs->rsi, regs->rdx, regs->rcx, regs->r8,
-                         regs->r9);
+        call_post_handler(fp, regs, rc);
     }
 }
 
@@ -212,8 +219,19 @@ void prepare_post_handler_trampoline(char *tramp, int *offset, uint64_t post_han
 }
 
 
+unsigned long call_pre_handler(frogprobe_t *fp, frogprobe_regs_t *regs)
+{
+    refcount_inc(&fp->refcnt);
+    unsigned long rc = fp->pre_handler(regs->rdi, regs->rsi, regs->rdx,
+                                       regs->rcx, regs->r8, regs->r9);
+    refcount_dec(&fp->refcnt);
+    return rc;
+}
+
 unsigned long frogprobe_pre_handler_ex(unsigned long addr, frogprobe_regs_t *regs)
 {
+    unsigned long rc;
+
     rcu_read_lock();
     frogprobe_t *fp = get_frogprobe_unsafe((void *)(addr - CALL_SIZE));
     // TODO: should never fail?
@@ -222,8 +240,7 @@ unsigned long frogprobe_pre_handler_ex(unsigned long addr, frogprobe_regs_t *reg
         frogprobe_t *tmp;
         list_for_each_entry_rcu(tmp, &fp->list, list) {
             if (!tmp->pre_handler) { continue; }
-            unsigned long rc = tmp->pre_handler(regs->rdi, regs->rsi, regs->rdx,
-                                                regs->rcx, regs->r8, regs->r9);
+            rc = call_pre_handler(tmp, regs);
             if (rc) { /* redirect original (meaning not running original function) */
                 rcu_read_unlock();
                 return rc;
@@ -237,8 +254,7 @@ unsigned long frogprobe_pre_handler_ex(unsigned long addr, frogprobe_regs_t *reg
     }
 
     // run found last, since hlist return the last added element
-    return fp->pre_handler(regs->rdi, regs->rsi, regs->rdx, regs->rcx,
-                           regs->r8,  regs->r9);
+    return call_pre_handler(fp, regs);
 }
 
 
@@ -408,6 +424,8 @@ int register_frogprobe(frogprobe_t *fp)
         return -EINVAL;
     }
 
+    refcount_set(&fp->refcnt, 1);
+
     int rc = 0;
     mutex_lock(&fp_context.lock);
 
@@ -444,6 +462,12 @@ out:
     return rc;
 }
 
+void wait_till_fp_unused(frogprobe_t *fp)
+{
+    while (refcount_read(&fp->refcnt) > 1) {
+        schedule(); }
+}
+
 void unregister_frogprobe(frogprobe_t *fp)
 {
     mutex_lock(&fp_context.lock);
@@ -455,6 +479,7 @@ void unregister_frogprobe(frogprobe_t *fp)
         vfree(fp->trampoline);
     } else {
         list_del_rcu(&fp->list);
+        wait_till_fp_unused(fp);
     }
 
     mutex_unlock(&fp_context.lock);
