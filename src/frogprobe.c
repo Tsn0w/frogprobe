@@ -26,13 +26,6 @@ void add_frogprobe_to_table_unsafe(frogprobe_t *fp)
     hlist_add_head_rcu(&fp->hlist, &fp_context.table[hash_idx]);
 }
 
-void add_frogprobe_to_table(frogprobe_t *fp)
-{
-    mutex_lock(&fp_context.lock);
-    add_frogprobe_to_table_unsafe(fp);
-    mutex_unlock(&fp_context.lock);
-}
-
 void remove_frogprobe_from_table_unsafe(frogprobe_t *fp)
 {
     hlist_del_rcu(&fp->hlist);
@@ -360,10 +353,8 @@ int register_another_frogprobe(frogprobe_t *fp)
         fp->npages = first_fp->npages;
     }
 
-    mutex_lock(&fp_context.lock);
     list_add_rcu(&fp->list, &first_fp->list);
     add_frogprobe_to_table_unsafe(fp);
-    mutex_unlock(&fp_context.lock);
     return 0;
 }
 
@@ -417,35 +408,46 @@ int register_frogprobe(frogprobe_t *fp)
         return -EINVAL;
     }
 
+    int rc = 0;
+    mutex_lock(&fp_context.lock);
+
     if (is_rereg_probe(fp)) {
-        return -EINVAL;
+        rc = -EINVAL;
+        goto out;
 
     } else if (is_symbol_frogprobed(fp)) {
-        return register_another_frogprobe(fp);
+        rc = register_another_frogprobe(fp);
+        goto out;
     }
 
     // validate if there is enough space for our trampoline (as done in kprobe + ftrace)
     // if already kprobed won't support now
     if (memcmp(fp->address, big_nop, NOP_SIZE)) {
-        return -EFAULT;
+        rc = -EFAULT;
+        goto out;
     }
 
     if (!create_trampoline(fp)) {
-        return -ENOMEM;
+        rc = -ENOMEM;
+        goto out;
     }
 
     INIT_LIST_HEAD(&fp->list);
-    add_frogprobe_to_table(fp);
+    add_frogprobe_to_table_unsafe(fp);
 
     char opcode[CALL_SIZE] = {0};
     encode_call(opcode, fp->trampoline, fp->address);
     text_poke_p(fp->address, opcode, CALL_SIZE);
-    return 0;
+
+out:
+    mutex_unlock(&fp_context.lock);
+    return rc;
 }
 
 void unregister_frogprobe(frogprobe_t *fp)
 {
     mutex_lock(&fp_context.lock);
+
     remove_frogprobe_from_table_unsafe(fp);
 
     if (list_empty(&fp->list)) {
@@ -454,6 +456,7 @@ void unregister_frogprobe(frogprobe_t *fp)
     } else {
         list_del_rcu(&fp->list);
     }
+
     mutex_unlock(&fp_context.lock);
 
     fp->address = NULL;
