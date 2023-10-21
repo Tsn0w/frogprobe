@@ -33,11 +33,9 @@ void add_frogprobe_to_table(frogprobe_t *fp)
     mutex_unlock(&fp_context.lock);
 }
 
-void remove_frogprobe_from_table(frogprobe_t *fp)
+void remove_frogprobe_from_table_unsafe(frogprobe_t *fp)
 {
-    mutex_lock(&fp_context.lock);
     hlist_del_rcu(&fp->hlist);
-    mutex_unlock(&fp_context.lock);
 }
 
 bool is_symbol_frogprobed_unsafe(frogprobe_t *fp)
@@ -447,17 +445,16 @@ int register_frogprobe(frogprobe_t *fp)
 
 void unregister_frogprobe(frogprobe_t *fp)
 {
-
-    remove_frogprobe_from_table(fp);
+    mutex_lock(&fp_context.lock);
+    remove_frogprobe_from_table_unsafe(fp);
 
     if (list_empty(&fp->list)) {
         text_poke_p(fp->address, big_nop, NOP_SIZE);
         vfree(fp->trampoline);
     } else {
-        mutex_lock(&fp_context.lock);
         list_del_rcu(&fp->list);
-        mutex_unlock(&fp_context.lock);
     }
+    mutex_unlock(&fp_context.lock);
 
     fp->address = NULL;
     fp->trampoline = 0;
