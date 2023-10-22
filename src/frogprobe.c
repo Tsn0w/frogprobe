@@ -129,6 +129,10 @@ void *module_alloc_around_call(void *addr, int size)
 
 void call_post_handler(frogprobe_t *fp, frogprobe_regs_t *regs, unsigned long rc)
 {
+    if (!fp->post_handler) {
+        return;
+    }
+
     refcount_inc(&fp->refcnt);
     fp->post_handler(rc, regs->rdi, regs->rsi, regs->rdx, regs->rcx, regs->r8,
                      regs->r9);
@@ -149,17 +153,13 @@ void frogprobe_post_handler_caller(unsigned long addr, frogprobe_regs_t *regs,
     if (!list_empty(&fp->list)) {
         frogprobe_t *tmp;
         list_for_each_entry_rcu(tmp, &fp->list, list) {
-            if (tmp->post_handler) {
-                call_post_handler(tmp, regs, rc);
-            }
+            call_post_handler(tmp, regs, rc);
         }
     }
     rcu_read_unlock();
 
-    if (fp->post_handler) {
-        // run found last, since hlist return the last added element
-        call_post_handler(fp, regs, rc);
-    }
+    // run found last, since hlist return the last added element
+    call_post_handler(fp, regs, rc);
 }
 
 extern void frogprobe_post_handler_ex(void);
@@ -235,6 +235,10 @@ void prepare_post_handler_trampoline(char *tramp, int *offset, uint64_t post_han
 
 unsigned long call_pre_handler(frogprobe_t *fp, frogprobe_regs_t *regs)
 {
+    if (!fp->pre_handler) {
+        return 0;
+    }
+
     refcount_inc(&fp->refcnt);
     unsigned long rc = fp->pre_handler(regs->rdi, regs->rsi, regs->rdx,
                                        regs->rcx, regs->r8, regs->r9);
@@ -256,7 +260,6 @@ unsigned long frogprobe_pre_handler_ex(unsigned long addr, frogprobe_regs_t *reg
     if (!list_empty(&fp->list)) {
         frogprobe_t *tmp;
         list_for_each_entry_rcu(tmp, &fp->list, list) {
-            if (!tmp->pre_handler) { continue; }
             rc = call_pre_handler(tmp, regs);
             if (rc) { /* redirect original (meaning not running original function) */
                 rcu_read_unlock();
@@ -265,10 +268,6 @@ unsigned long frogprobe_pre_handler_ex(unsigned long addr, frogprobe_regs_t *reg
         }
     }
     rcu_read_unlock();
-
-    if (!fp->pre_handler) {
-        return 0;
-    }
 
     // run found last, since hlist return the last added element
     return call_pre_handler(fp, regs);
