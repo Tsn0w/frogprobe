@@ -278,21 +278,27 @@ unsigned long frogprobe_pre_handler_ex(unsigned long addr, frogprobe_regs_t *reg
 bool create_trampoline(frogprobe_t *fp)
 {
     bool is_post_handler = fp->post_handler ? true : false;
-    int stub_size = PUSH_CALL_CONVENTIONS_REGS_SIZE +
-                    MOV_RSP_32BIT_OFFSET_TO_RDI_SIZE + LEA_RSI_RSP_OFFSET_SIZE +
-                    RIP_REL_CALL_SIZE + POP_CALL_CONVENTIONS_REGS_SIZE +
-                    CMP_RAX_IMM + BYTE_REL_JUMP_SIZE + MOV_RAX_TO_RSP_BASE_SIZE +
-                    RETQ_SIZE + ptr_size +
-                    (is_post_handler ? (POST_HANDLER_PREP_SIZE -
-                                        PUSH_CALL_CONVENTIONS_REGS_SIZE -
-                                        POP_CALL_CONVENTIONS_REGS_SIZE +
-                                        MOV_CC_REGS_FROM_STACK): 0);
+    int text_stub_size = LOCK_INC_RIP_REL_OFFSET_SIZE + PUSH_CALL_CONVENTIONS_REGS_SIZE +
+                         MOV_RSP_32BIT_OFFSET_TO_RDI_SIZE + LEA_RSI_RSP_OFFSET_SIZE +
+                         RIP_REL_CALL_SIZE + POP_CALL_CONVENTIONS_REGS_SIZE +
+                         CMP_RAX_IMM + BYTE_REL_JUMP_SIZE + MOV_RAX_TO_RSP_BASE_SIZE +
+                         LOCK_DEC_RIP_REL_OFFSET_SIZE + RETQ_SIZE + ptr_size +
+                        (is_post_handler ? (POST_HANDLER_PREP_SIZE -
+                                            PUSH_CALL_CONVENTIONS_REGS_SIZE -
+                                            POP_CALL_CONVENTIONS_REGS_SIZE +
+                                            MOV_CC_REGS_FROM_STACK): 0);
+    // trampoline counter is on the next page
+    int stub_size = PAGE_ALIGN(text_stub_size) + ptr_size;
     char *trampoline = module_alloc_around_call(fp->address, stub_size);
     if (!trampoline) {
         return false;
     }
 
     int offset = 0;
+
+    encode_lock_inc_rip_rel(trampoline, &offset, (uint64_t)(trampoline + stub_size
+                            - ptr_size));
+
     if (is_post_handler) {
         // for imm -> see @prepare_post_handler_trampoline draw to see rsp offset from cc-regs
         int cc_regs_offset = 3 * ptr_size;
@@ -300,7 +306,7 @@ bool create_trampoline(frogprobe_t *fp)
         encode_mov_rsp_32bit_offset_to_rdi(trampoline, &offset, 0);
         encode_lea_rsi_rsp_offset(trampoline, &offset, cc_regs_offset);
         encode_relative_call(trampoline, &offset,
-                             (uint64_t)(trampoline + stub_size - ptr_size));
+                             (uint64_t)(trampoline + text_stub_size - ptr_size));
         encode_mov_from_stack_offset_calling_conventions_regs(trampoline, &offset,
                                                               cc_regs_offset);
     } else {
@@ -308,7 +314,7 @@ bool create_trampoline(frogprobe_t *fp)
         encode_mov_rsp_32bit_offset_to_rdi(trampoline, &offset, ptr_size * 7);
         encode_lea_rsi_rsp_offset(trampoline, &offset, 0);
         encode_relative_call(trampoline, &offset,
-                             (uint64_t)(trampoline + stub_size - ptr_size));
+                             (uint64_t)(trampoline + text_stub_size - ptr_size));
         encode_pop_calling_conventions_regs(trampoline, &offset);
     }
 
@@ -318,21 +324,24 @@ bool create_trampoline(frogprobe_t *fp)
                          BYTE_REL_JUMP_SIZE +  MOV_RAX_TO_RSP_BASE_SIZE));
     encode_mov_rax_to_rsp_offset(trampoline, &offset, 0);
 
+    encode_lock_dec_rip_rel(trampoline, &offset, (uint64_t)(trampoline + stub_size
+                            - ptr_size));
     encode_retq(trampoline, &offset);
 
     *(uint64_t *)(trampoline + offset) = (uint64_t)frogprobe_pre_handler_ex;
 
-    int npages = DIV_ROUND_UP(stub_size, PAGE_SIZE);
+    int npages = DIV_ROUND_UP(text_stub_size, PAGE_SIZE);
     set_memory_rox_p((unsigned long)trampoline, npages);
 
     fp->trampoline = trampoline;
     fp->npages = npages;
+
     return true;
 }
 
 bool trampoline_prepared_for_post(frogprobe_t *first)
 {
-    return !is_insn_pop_r11(first->trampoline);
+    return !is_insn_pop_r11(first->trampoline + LOCK_INC_RIP_REL_OFFSET_SIZE);
 }
 
 int register_another_frogprobe(frogprobe_t *fp)
@@ -396,16 +405,20 @@ int register_another_frogprobe(frogprobe_t *fp)
  *    --------------------------------------------------
  *   |  fp->trampoline:
  *   |                  --------------------------------------
- *    ---------------->| prepare post handler logic (if need) |
+ *    ---------------->|     lock inc [trampoline counter]    |
+ *                     | prepare post handler logic (if need) |
  *                     |              push regs               |
  *                     |          set rdi fp->addr + 5        |
  *                     |            set rsi fp_regs           |
  *                     |    call [rip + pre_handler_offset]   |
  *                     |               pop regs               |
  *                     |     logic to change rc (if need)     |
+ *                     |     lock dec [trampoline counter]    |
  *                     |               ret; int3              |
  * pre_handler_offset: |       frogprobe_pre_handler_ex       |
  *                      --------------------------------------
+ * at next page (must be writeable)
+ * trampoline_counter:
  *
  */
 int register_frogprobe(frogprobe_t *fp)
@@ -465,7 +478,17 @@ out:
 void wait_till_fp_unused(frogprobe_t *fp)
 {
     while (refcount_read(&fp->refcnt) > 1) {
-        schedule(); }
+        schedule();
+    }
+}
+
+void wait_till_trampoline_unused(frogprobe_t *fp)
+{
+    volatile char *trampoline_counter_p = fp->trampoline + PAGE_SIZE * fp->npages;
+    while (*(unsigned long *)trampoline_counter_p != 0) {
+        schedule();
+    }
+
 }
 
 void unregister_frogprobe(frogprobe_t *fp)
@@ -476,6 +499,7 @@ void unregister_frogprobe(frogprobe_t *fp)
 
     if (list_empty(&fp->list)) {
         text_poke_p(fp->address, big_nop, NOP_SIZE);
+        wait_till_trampoline_unused(fp);
         vfree(fp->trampoline);
     } else {
         list_del_rcu(&fp->list);
