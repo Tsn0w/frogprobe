@@ -57,3 +57,11 @@ void encode_mov_rsp_32bit_offset_to_rdi(char *trampoline, int *offset,
 #define LES_RSI_RSP_IMM_OFFSET 4
 #define LEA_RSI_RSP_OFFSET_SIZE 5
 void encode_lea_rsi_rsp_offset(char *trampoline, int *offset, short stack_offset);
+
+#define LOCK_INC_RIP_REL_OFFSET_PREFIX_SIZE 3
+#define LOCK_INC_RIP_REL_OFFSET_SIZE 7
+void encode_lock_inc_rip_rel(char *trampoline, int *offset, uint64_t dest);
+
+#define LOCK_DEC_RIP_REL_OFFSET_PREFIX_SIZE 3
+#define LOCK_DEC_RIP_REL_OFFSET_SIZE 7
+void encode_lock_dec_rip_rel(char *trampoline, int *offset, uint64_t dest);

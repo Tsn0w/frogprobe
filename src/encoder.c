@@ -154,3 +154,31 @@ void encode_lea_rsi_rsp_offset(char *trampoline, int *offset, short stack_offset
     trampoline[*offset + LES_RSI_RSP_IMM_OFFSET] = stack_offset & 0xff;
     *offset += LEA_RSI_RSP_OFFSET_SIZE;
 }
+
+void encode_lock_inc_rip_rel(char *trampoline, int *offset, uint64_t dest)
+{
+    static const char inc_rip_rel_offset[LOCK_INC_RIP_REL_OFFSET_PREFIX_SIZE] = {
+        0xf0, 0xff, 0x05,
+    };
+
+    uint32_t rel_off = (uint32_t)(dest - LOCK_INC_RIP_REL_OFFSET_SIZE -
+                                  (uint64_t)trampoline - *offset);
+
+    memcpy(trampoline + *offset, inc_rip_rel_offset, LOCK_INC_RIP_REL_OFFSET_PREFIX_SIZE);
+    *(uint32_t *)(trampoline + *offset + LOCK_INC_RIP_REL_OFFSET_PREFIX_SIZE) = rel_off;
+    *offset += LOCK_INC_RIP_REL_OFFSET_SIZE;
+}
+
+void encode_lock_dec_rip_rel(char *trampoline, int *offset, uint64_t dest)
+{
+    static const char inc_rip_rel_offset[LOCK_DEC_RIP_REL_OFFSET_PREFIX_SIZE] = {
+        0xf0, 0xff, 0x0d,
+    };
+
+    uint32_t rel_off = (uint32_t)(dest - LOCK_DEC_RIP_REL_OFFSET_SIZE -
+                                  (uint64_t)trampoline - *offset);
+
+    memcpy(trampoline + *offset, inc_rip_rel_offset, LOCK_DEC_RIP_REL_OFFSET_PREFIX_SIZE);
+    *(uint32_t *)(trampoline + *offset + LOCK_INC_RIP_REL_OFFSET_PREFIX_SIZE) = rel_off;
+    *offset += LOCK_DEC_RIP_REL_OFFSET_SIZE;
+}
