@@ -118,8 +118,8 @@ void encode_mov_from_stack_offset_calling_conventions_regs(char *trampoline,
 {
     static const char mov_regs_from_rsp_offset[MOV_CC_REGS_FROM_STACK] = {
         0x4c, 0x8b, 0x54, 0x24, 0x18, // mov r10, [rsp + 0x18]
-        0x4c, 0x8b, 0x4c, 0x24, 0x20, // mov r9, [rsp + 0x10]
-        0x4c, 0x8b, 0x44, 0x24, 0x28, // mov r8, [rsp + 0x28]
+        0x4c, 0x8b, 0x4c, 0x24, 0x20, // mov r9,  [rsp + 0x20]
+        0x4c, 0x8b, 0x44, 0x24, 0x28, // mov r8,  [rsp + 0x28]
         0x48, 0x8b, 0x4c, 0x24, 0x30, // mov rcx, [rsp + 0x30]
         0x48, 0x8b, 0x54, 0x24, 0x38, // mov rdx, [rsp + 0x38]
         0x48, 0x8b, 0x74, 0x24, 0x40, // mov rsi, [rsp + 0x40]
@@ -127,8 +127,10 @@ void encode_mov_from_stack_offset_calling_conventions_regs(char *trampoline,
     };
 
     memcpy(trampoline + *offset, mov_regs_from_rsp_offset, MOV_CC_REGS_FROM_STACK);
+    for (int i = 0; i < 7; i++) {
+        trampoline[*offset + i * MOV_MEM_OFFSET_TO_REG_SIZE + 4] = stack_offset + i * 8;
+    }
     *offset += MOV_CC_REGS_FROM_STACK;
-
 }
 
 void encode_mov_rsp_32bit_offset_to_rdi(char *trampoline, int *offset,
@@ -153,6 +155,20 @@ void encode_lea_rsi_rsp_offset(char *trampoline, int *offset, short stack_offset
     memcpy(trampoline + *offset, lea_rsi_rsp_offset, LEA_RSI_RSP_OFFSET_SIZE);
     trampoline[*offset + LES_RSI_RSP_IMM_OFFSET] = stack_offset & 0xff;
     *offset += LEA_RSI_RSP_OFFSET_SIZE;
+}
+
+void encode_lea_rax_rip(char *trampoline, int *offset, uint64_t dest)
+{
+    static const char lea_rax_rip[LEA_RAX_RIP_DEST_OFFSET] = {
+        0x48, 0x8d, 0x05, /* lea rax, [rip + 0xXX] */
+    };
+
+    uint32_t rel_off = (uint32_t)(dest - LEA_RAX_RIP_DEST_SIZE -
+                                  (uint64_t)trampoline - *offset);
+
+    memcpy(trampoline + *offset, lea_rax_rip, LEA_RAX_RIP_DEST_OFFSET);
+    *(uint32_t *)(trampoline + *offset + LEA_RAX_RIP_DEST_OFFSET) = rel_off;
+    *offset += LEA_RAX_RIP_DEST_SIZE;
 }
 
 void encode_lock_inc_rip_rel(char *trampoline, int *offset, uint64_t dest)
