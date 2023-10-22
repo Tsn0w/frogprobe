@@ -141,7 +141,10 @@ void frogprobe_post_handler_caller(unsigned long addr, frogprobe_regs_t *regs,
 {
     rcu_read_lock();
     frogprobe_t *fp = get_frogprobe_unsafe((void *)(addr - CALL_SIZE));
-    // TODO: should never fail?
+    if (!fp) {
+        // last frogprobe at this address removed
+        return;
+    }
 
     if (!list_empty(&fp->list)) {
         frogprobe_t *tmp;
@@ -163,13 +166,17 @@ extern void frogprobe_post_handler_ex(void);
 __asm__(
 "frogprobe_post_handler_ex:"
 ".intel_syntax;"
+    "pop %rcx;" // current trampoline counter
     "pop %rdi;"
     "mov %rsi, %rsp;"
     "mov %rdx, %rax;"
     "push %rax;" // save original return value
+    "push %rcx;"
     "call frogprobe_post_handler_caller;"
+    "pop %rcx;"
     "pop %rax;"
     "add %rsp, 0x38;" // clean stack from cc-regs
+    "lock dec dword ptr [%rcx];"
     "ret; int3;"
 ".att_syntax;"
 );
@@ -181,8 +188,10 @@ __asm__(
  * Stub post_handler logic is:
  *  pop r11
  *  push rdi, rsi, rdx, rcx, r8, r9, r10 (instead of the pushes in the base trampoline)
- *  movabs rax, frogprobe_post_handler_ex
+ *  lea rax, [rip + 0xXX] // XX is the offset for the current trampoline_counter
  *  push r11
+ *  push rax
+ *  movabs rax, frogprobe_post_handler_ex
  *  push rax
  *  push r11
  *
@@ -197,6 +206,7 @@ __asm__(
  *         |       original return address       |
  *         |       calling conventions regs      |
  *         |             fp->addr + 5            |
+ *         |         trampoline_counter          |
  *         |       frogprobe_post_handler_ex     |
  *         |             fp->addr + 5            | <-- frogpore_post_handler_ex can't use this
  *          -------------------------------------
@@ -206,14 +216,18 @@ __asm__(
  * which will restore the registers and call post_handler.
  */
 #define POST_HANDLER_PREP_SIZE (POP_R11_SIZE + PUSH_CALL_CONVENTIONS_REGS_SIZE  +  \
-                                MOVABS_RAX_SIZE + PUSH_R11_SIZE +  PUSH_RAX_SIZE + \
+                                LEA_RAX_RIP_DEST_SIZE + PUSH_R11_SIZE +            \
+                                PUSH_RAX_SIZE + MOVABS_RAX_SIZE + PUSH_RAX_SIZE +  \
                                 PUSH_R11_SIZE)
-void prepare_post_handler_trampoline(char *tramp, int *offset, uint64_t post_handler)
+void prepare_post_handler_trampoline(char *tramp, int *offset, uint64_t post_handler,
+                                     int npages)
 {
     encode_pop_r11(tramp, offset);
     encode_push_calling_conventions_regs(tramp, offset);
-    encode_movabs_rax(tramp, offset, (uint64_t)&frogprobe_post_handler_ex);
+    encode_lea_rax_rip(tramp, offset, (uint64_t)(tramp + npages * PAGE_SIZE));
     encode_push_r11(tramp, offset);
+    encode_push_rax(tramp, offset);
+    encode_movabs_rax(tramp, offset, (uint64_t)&frogprobe_post_handler_ex);
     encode_push_rax(tramp, offset);
     encode_push_r11(tramp, offset);
 }
@@ -234,7 +248,10 @@ unsigned long frogprobe_pre_handler_ex(unsigned long addr, frogprobe_regs_t *reg
 
     rcu_read_lock();
     frogprobe_t *fp = get_frogprobe_unsafe((void *)(addr - CALL_SIZE));
-    // TODO: should never fail?
+    if (!fp) {
+        // last frogprobe at this address removed
+        return 0;
+    }
 
     if (!list_empty(&fp->list)) {
         frogprobe_t *tmp;
@@ -285,7 +302,8 @@ bool create_trampoline(frogprobe_t *fp)
                          LOCK_DEC_RIP_REL_OFFSET_SIZE + RETQ_SIZE + ptr_size +
                         (is_post_handler ? (POST_HANDLER_PREP_SIZE -
                                             PUSH_CALL_CONVENTIONS_REGS_SIZE -
-                                            POP_CALL_CONVENTIONS_REGS_SIZE +
+                                            POP_CALL_CONVENTIONS_REGS_SIZE -
+                                            LOCK_DEC_RIP_REL_OFFSET_SIZE +
                                             MOV_CC_REGS_FROM_STACK): 0);
     // trampoline counter is on the next page
     int stub_size = PAGE_ALIGN(text_stub_size) + ptr_size;
@@ -294,6 +312,8 @@ bool create_trampoline(frogprobe_t *fp)
         return false;
     }
 
+
+    int npages = DIV_ROUND_UP(text_stub_size, PAGE_SIZE);
     int offset = 0;
 
     encode_lock_inc_rip_rel(trampoline, &offset, (uint64_t)(trampoline + stub_size
@@ -301,8 +321,9 @@ bool create_trampoline(frogprobe_t *fp)
 
     if (is_post_handler) {
         // for imm -> see @prepare_post_handler_trampoline draw to see rsp offset from cc-regs
-        int cc_regs_offset = 3 * ptr_size;
-        prepare_post_handler_trampoline(trampoline, &offset, (uint64_t)fp->post_handler);
+        int cc_regs_offset = 4 * ptr_size;
+        prepare_post_handler_trampoline(trampoline, &offset,
+                                        (uint64_t)fp->post_handler, npages);
         encode_mov_rsp_32bit_offset_to_rdi(trampoline, &offset, 0);
         encode_lea_rsi_rsp_offset(trampoline, &offset, cc_regs_offset);
         encode_relative_call(trampoline, &offset,
@@ -324,18 +345,17 @@ bool create_trampoline(frogprobe_t *fp)
                          BYTE_REL_JUMP_SIZE +  MOV_RAX_TO_RSP_BASE_SIZE));
     encode_mov_rax_to_rsp_offset(trampoline, &offset, 0);
 
-    encode_lock_dec_rip_rel(trampoline, &offset, (uint64_t)(trampoline + stub_size
-                            - ptr_size));
+    if (!is_post_handler) {
+        encode_lock_dec_rip_rel(trampoline, &offset, (uint64_t)(trampoline + stub_size
+                                - ptr_size));
+    }
     encode_retq(trampoline, &offset);
 
     *(uint64_t *)(trampoline + offset) = (uint64_t)frogprobe_pre_handler_ex;
 
-    int npages = DIV_ROUND_UP(text_stub_size, PAGE_SIZE);
     set_memory_rox_p((unsigned long)trampoline, npages);
-
     fp->trampoline = trampoline;
     fp->npages = npages;
-
     return true;
 }
 
@@ -488,21 +508,24 @@ void wait_till_trampoline_unused(frogprobe_t *fp)
     while (*(unsigned long *)trampoline_counter_p != 0) {
         schedule();
     }
-
 }
 
 void unregister_frogprobe(frogprobe_t *fp)
 {
     mutex_lock(&fp_context.lock);
 
+    rcu_read_lock();
     remove_frogprobe_from_table_unsafe(fp);
+    rcu_read_unlock();
 
     if (list_empty(&fp->list)) {
         text_poke_p(fp->address, big_nop, NOP_SIZE);
         wait_till_trampoline_unused(fp);
         vfree(fp->trampoline);
     } else {
+        rcu_read_lock();
         list_del_rcu(&fp->list);
+        rcu_read_unlock();
         wait_till_fp_unused(fp);
     }
 
