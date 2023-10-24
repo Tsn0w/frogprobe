@@ -311,7 +311,7 @@ bool create_trampoline(frogprobe_t *fp)
         return false;
     }
 
-
+    printk("allocated trampoline at: 0x%016lx\n", (unsigned long)trampoline);
     int npages = DIV_ROUND_UP(text_stub_size, PAGE_SIZE);
     int offset = 0;
 
@@ -363,6 +363,14 @@ bool trampoline_prepared_for_post(frogprobe_t *first)
     return !is_insn_pop_r11(first->trampoline + LOCK_INC_RIP_REL_OFFSET_SIZE);
 }
 
+void wait_till_trampoline_unused(char *trampoline, int npages)
+{
+    volatile char *trampoline_counter_p = trampoline + PAGE_SIZE * npages;
+    while (*(unsigned long *)trampoline_counter_p != 0) {
+        schedule();
+    }
+}
+
 int register_another_frogprobe(frogprobe_t *fp)
 {
     frogprobe_t *first_fp = get_frogprobe(fp->address);
@@ -378,6 +386,7 @@ int register_another_frogprobe(frogprobe_t *fp)
 
         frogprobe_t *tmp;
         char *old_tramp = first_fp->trampoline;
+        int old_npages = first_fp->npages;
 
         first_fp->trampoline = fp->trampoline;
         first_fp->npages = fp->npages;
@@ -391,6 +400,7 @@ int register_another_frogprobe(frogprobe_t *fp)
         char opcode[CALL_SIZE] = {0};
         encode_call(opcode, fp->trampoline, fp->address);
         text_poke_p(fp->address, opcode, CALL_SIZE);
+        wait_till_trampoline_unused(old_tramp, old_npages);
         vfree(old_tramp);
     } else {
         fp->trampoline = first_fp->trampoline;
@@ -501,12 +511,9 @@ void wait_till_fp_unused(frogprobe_t *fp)
     }
 }
 
-void wait_till_trampoline_unused(frogprobe_t *fp)
+void wait_till_fp_trampoline_unused(frogprobe_t *fp)
 {
-    volatile char *trampoline_counter_p = fp->trampoline + PAGE_SIZE * fp->npages;
-    while (*(unsigned long *)trampoline_counter_p != 0) {
-        schedule();
-    }
+    wait_till_trampoline_unused(fp->trampoline, fp->npages);
 }
 
 void unregister_frogprobe(frogprobe_t *fp)
@@ -519,7 +526,7 @@ void unregister_frogprobe(frogprobe_t *fp)
 
     if (list_empty(&fp->list)) {
         text_poke_p(fp->address, big_nop, NOP_SIZE);
-        wait_till_trampoline_unused(fp);
+        wait_till_fp_trampoline_unused(fp);
         vfree(fp->trampoline);
     } else {
         rcu_read_lock();
