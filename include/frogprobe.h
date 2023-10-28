@@ -1,6 +1,7 @@
 #pragma once
 
 #include <linux/refcount.h>
+#include <linux/srcutree.h>
 
 /*
  * frogprobe is I/S for hooking kernel functions just like kprobe with the ability to
@@ -45,6 +46,8 @@ typedef struct frogprobe_s {
     frogprobe_post_handler_t *post_handler;
     struct hlist_node hlist;
     struct list_head list;
+    struct srcu_struct *list_srcu; // srcu for list to allow sleep in handlers
+
     refcount_t refcnt;
 } frogprobe_t;
 
