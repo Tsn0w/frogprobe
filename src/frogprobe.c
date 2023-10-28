@@ -11,6 +11,12 @@
 #define FROGPROBE_TABLE_SIZE (1 << FROGPROBE_HASH_BITS)
 #define ptr_size (sizeof(void *))
 
+typedef struct rereg_fp_work_s {
+    struct work_struct work;
+    char *tramp_addr;
+    unsigned long npages;
+} rereg_fp_work_t;
+
 struct frogprobe_context_s {
     struct hlist_head table[FROGPROBE_TABLE_SIZE];
     struct mutex lock; /* lock both table and the frogprobe list */
@@ -371,6 +377,28 @@ void wait_till_trampoline_unused(char *trampoline, int npages)
     }
 }
 
+static void release_trampoline_work_fn(struct work_struct *work)
+{
+    rereg_fp_work_t *fp_work = container_of(work, rereg_fp_work_t, work);
+    wait_till_trampoline_unused(fp_work->tramp_addr, fp_work->npages);
+    vfree(fp_work->tramp_addr);
+}
+
+void release_trampoline_later(char *tramp_addr, unsigned long npages)
+{
+    rereg_fp_work_t *fp_work = kmalloc(sizeof(*fp_work), GFP_KERNEL);
+    if (fp_work) {
+        fp_work->tramp_addr = tramp_addr;
+        fp_work->npages = npages;
+        INIT_WORK(&fp_work->work, release_trampoline_work_fn);
+        schedule_work(&fp_work->work);
+    } else {
+        // if failed to allocate work, just wait here
+        wait_till_trampoline_unused(tramp_addr, npages);
+        vfree(tramp_addr);
+    }
+}
+
 int register_another_frogprobe(frogprobe_t *fp)
 {
     frogprobe_t *first_fp = get_frogprobe(fp->address);
@@ -400,8 +428,7 @@ int register_another_frogprobe(frogprobe_t *fp)
         char opcode[CALL_SIZE] = {0};
         encode_call(opcode, fp->trampoline, fp->address);
         text_poke_p(fp->address, opcode, CALL_SIZE);
-        wait_till_trampoline_unused(old_tramp, old_npages);
-        vfree(old_tramp);
+        release_trampoline_later(old_tramp, old_npages);
     } else {
         fp->trampoline = first_fp->trampoline;
         fp->npages = first_fp->npages;
