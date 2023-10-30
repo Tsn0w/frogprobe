@@ -47,7 +47,7 @@ typedef struct frogprobe_s {
     struct hlist_node hlist;
     struct list_head list;
     struct srcu_struct *list_srcu; // srcu for list to allow sleep in handlers
-
+    bool gone;
     refcount_t refcnt;
 } frogprobe_t;
 

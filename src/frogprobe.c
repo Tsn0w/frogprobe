@@ -160,7 +160,7 @@ void *module_alloc_around_call(void *addr, int size)
 
 void call_post_handler(frogprobe_t *fp, frogprobe_regs_t *regs, unsigned long rc)
 {
-    if (!fp->post_handler) {
+    if (!fp->post_handler || fp->gone) {
         return;
     }
 
@@ -274,7 +274,7 @@ void prepare_post_handler_trampoline(char *tramp, int *offset, uint64_t post_han
 
 unsigned long call_pre_handler(frogprobe_t *fp, frogprobe_regs_t *regs)
 {
-    if (!fp->pre_handler) {
+    if (!fp->pre_handler || fp->gone) {
         return 0;
     }
 
@@ -356,7 +356,6 @@ bool create_trampoline(frogprobe_t *fp)
         return false;
     }
 
-    printk("allocated trampoline at: 0x%016lx\n", (unsigned long)trampoline);
     int npages = DIV_ROUND_UP(text_stub_size, PAGE_SIZE);
     int offset = 0;
 
@@ -563,6 +562,7 @@ int register_frogprobe(frogprobe_t *fp)
     int rc = 0;
     mutex_lock(&fp_context.lock);
 
+    fp->gone = false;
     if (is_rereg_probe(fp)) {
         rc = -EINVAL;
         goto out;
@@ -616,6 +616,8 @@ void unregister_frogprobe(frogprobe_t *fp)
     remove_frogprobe_from_table_unsafe(fp);
     rcu_read_unlock();
 
+    fp->gone = true;
+
     if (list_empty(&fp->list)) {
         text_poke_p(fp->address, big_nop, NOP_SIZE);
         wait_till_fp_trampoline_unused(fp);
@@ -626,9 +628,9 @@ void unregister_frogprobe(frogprobe_t *fp)
             kfree(fp->list_srcu);
         }
     } else {
+        wait_till_fp_unused(fp);
         list_del_rcu(&fp->list);
         synchronize_srcu(fp->list_srcu);
-        wait_till_fp_unused(fp);
     }
 
     mutex_unlock(&fp_context.lock);
