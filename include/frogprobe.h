@@ -45,10 +45,14 @@ typedef struct frogprobe_s {
     frogprobe_pre_handler_t *pre_handler;
     frogprobe_post_handler_t *post_handler;
     struct hlist_node hlist;
-    struct list_head list;
-    struct srcu_struct *list_srcu; // srcu for list to allow sleep in handlers
     bool gone;
     refcount_t refcnt;
+
+    // multiple probes on the same address
+    // if multiple probes, just the head will have valid trampoline address
+    bool is_multiprobe_head;
+    struct list_head list;
+    struct srcu_struct list_srcu; // srcu for list to allow sleep in handlers
 } frogprobe_t;
 
 typedef struct frogprobe_regs_s {

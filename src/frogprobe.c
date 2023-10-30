@@ -67,40 +67,28 @@ bool is_symbol_frogprobed(frogprobe_t *fp)
 #ifdef CONFIG_PROVE_RCU_LIST
 static int is_fp_srcu_read_lock_held(const frogprobe_t *fp)
 {
-    if (fp->list_srcu) {
-        return srcu_read_lock_held(fp->list_srcu);
-    }
-    return 1;
+    return srcu_read_lock_held(&fp->list_srcu);
 }
 #endif /* CONFIG_PROVE_RCU_LIST */
 
 bool is_fp_in_list(frogprobe_t *new, frogprobe_t *head)
 {
-    int idx;
-    bool rc = false;
-
-    if (head->list_srcu) {
-        idx = srcu_read_lock(head->list_srcu);
-    }
-
-    if (list_empty(&head->list)) {
-            return head == new;
-    } else {
+    if (head->is_multiprobe_head) {
+        bool rc = false;
+        int idx = srcu_read_lock(&head->list_srcu);
         frogprobe_t *tmp;
         list_for_each_entry_srcu(tmp, &head->list, list,
                                   is_fp_srcu_read_lock_held(head)) {
             if (new == tmp) {
                 rc = true;
-                goto exit;
+                break;
             }
         }
+        srcu_read_unlock(&head->list_srcu, idx);
+        return rc;
     }
 
-exit:
-    if (head->list_srcu) {
-        srcu_read_unlock(head->list_srcu, idx);
-    }
-    return rc;
+    return (new == head);
 }
 
 bool is_rereg_probe_unsafe(frogprobe_t *fp)
@@ -180,25 +168,19 @@ void frogprobe_post_handler_caller(unsigned long addr, frogprobe_regs_t *regs,
         return;
     }
 
-    int idx;
-    if (fp->list_srcu) {
-        idx = srcu_read_lock(fp->list_srcu);
-    }
+    if (fp->is_multiprobe_head) {
+        int idx = srcu_read_lock(&fp->list_srcu);
 
-    if (!list_empty(&fp->list)) {
         frogprobe_t *tmp;
         list_for_each_entry_srcu(tmp, &fp->list, list,
                                  is_fp_srcu_read_lock_held(fp)) {
             call_post_handler(tmp, regs, rc);
         }
-    }
 
-    if (fp->list_srcu) {
-        srcu_read_unlock(fp->list_srcu, idx);
+        srcu_read_unlock(&fp->list_srcu, idx);
+    } else {
+        call_post_handler(fp, regs, rc);
     }
-
-    // run found last, since hlist return the last added element
-    call_post_handler(fp, regs, rc);
 }
 
 extern void frogprobe_post_handler_ex(void);
@@ -293,28 +275,24 @@ unsigned long frogprobe_pre_handler_ex(unsigned long addr, frogprobe_regs_t *reg
         return 0;
     }
 
-    int idx;
-    if (fp->list_srcu) {
-        idx = srcu_read_lock(fp->list_srcu);
-    }
-
     unsigned long rc;
-    if (!list_empty(&fp->list)) {
+    if (fp->is_multiprobe_head) {
+        int idx = srcu_read_lock(&fp->list_srcu);
+
         frogprobe_t *tmp;
         list_for_each_entry_rcu(tmp, &fp->list, list) {
             rc = call_pre_handler(tmp, regs);
             if (rc) { /* redirect original (meaning not running original function) */
-            goto exit;
+                srcu_read_unlock(&fp->list_srcu, idx);
+                return rc;
             }
         }
+
+        srcu_read_unlock(&fp->list_srcu, idx);
+    } else {
+        rc = call_pre_handler(fp, regs);
     }
 
-    // run found last, since hlist return the last added element
-    rc = call_pre_handler(fp, regs);
-exit:
-    if (fp->list_srcu) {
-        srcu_read_unlock(fp->list_srcu, idx);
-    }
     return rc;
 }
 
@@ -437,69 +415,80 @@ void release_trampoline_later(char *tramp_addr, unsigned long npages)
     }
 }
 
+int create_frogprobe_head(frogprobe_t *previous)
+{
+    frogprobe_t *head = kzalloc(sizeof(*head), GFP_KERNEL);
+    if (!head) {
+        return -ENOMEM;
+    }
+
+    int rc = init_srcu_struct(&head->list_srcu);
+    if (rc < 0) {
+        kfree(head);
+        return rc;
+    }
+
+    head->is_multiprobe_head = true;
+    head->address = previous->address;
+    INIT_LIST_HEAD(&head->list);
+
+    // adding to list now, so will reachable when adding head to the hlist
+    list_add_rcu(&previous->list, &head->list);
+    synchronize_srcu(&head->list_srcu);
+
+    add_frogprobe_to_table_unsafe(head);
+    remove_frogprobe_from_table_unsafe(previous);
+
+    head->trampoline = previous->trampoline;
+    head->npages = previous->npages;
+    previous->trampoline = NULL;
+    previous->npages = 0;
+    return 0;
+}
+
 int register_another_frogprobe(frogprobe_t *fp)
 {
     frogprobe_t *first_fp = get_frogprobe(fp->address);
     // TODO: should never fail?
 
-    // first time we have 2 frogprobes, create sleepable-rcu to allow sleep in handlers
-    // this ptr, will be the same for every fp in the list
-    bool srcu_created_now = false;
-    if (!first_fp->list_srcu) {
-        first_fp->list_srcu = kmalloc(sizeof(*first_fp->list_srcu), GFP_KERNEL);
-        if (!first_fp->list_srcu) {
-            return -ENOMEM;
-        }
-
-        int rc = init_srcu_struct(first_fp->list_srcu);
+    int rc = 0;
+    if (!first_fp->is_multiprobe_head) {
+        rc = create_frogprobe_head(first_fp);
         if (rc < 0) {
-            kfree(first_fp->list_srcu);
             return rc;
         }
-        srcu_created_now = true;
+
+        first_fp = get_frogprobe(fp->address);
     }
+
+    // first_fp points to the head_frogprobe
 
     // first time we encouter a frogprobe on this symbol with post_handler
     // re-create trampoline with post_handler and update list
     // once we ready for post_handler, we will always be
     if (fp->post_handler && !trampoline_prepared_for_post(first_fp)) {
         if (!create_trampoline(fp)) {
-            cleanup_srcu_struct(first_fp->list_srcu);
-            kfree(first_fp->list_srcu);
+            // head will be freed when the last frogprobe on the addr will be removed
             return -ENOMEM;
         }
 
-        frogprobe_t *tmp;
         char *old_tramp = first_fp->trampoline;
         int old_npages = first_fp->npages;
 
         first_fp->trampoline = fp->trampoline;
         first_fp->npages = fp->npages;
 
-        if (!srcu_created_now) {
-            int idx = srcu_read_lock(first_fp->list_srcu);
-            list_for_each_entry_srcu(tmp, &first_fp->list, list,
-                                     is_fp_srcu_read_lock_held(first_fp)) {
-               tmp->trampoline = fp->trampoline;
-                tmp->npages = fp->npages;
-            }
-            srcu_read_unlock(first_fp->list_srcu, idx);
-        }
-
         char opcode[CALL_SIZE] = {0};
         encode_call(opcode, fp->trampoline, fp->address);
         text_poke_p(fp->address, opcode, CALL_SIZE);
         release_trampoline_later(old_tramp, old_npages);
-    } else {
-        fp->trampoline = first_fp->trampoline;
-        fp->npages = first_fp->npages;
     }
 
-    fp->list_srcu = first_fp->list_srcu;
-    list_add_rcu(&fp->list, &first_fp->list);
-    synchronize_srcu(fp->list_srcu);
+    fp->trampoline = NULL;
+    fp->npages = 0;
 
-    add_frogprobe_to_table_unsafe(fp);
+    list_add_tail_rcu(&fp->list, &first_fp->list);
+    synchronize_srcu(&first_fp->list_srcu);
     return 0;
 }
 
@@ -558,6 +547,7 @@ int register_frogprobe(frogprobe_t *fp)
     }
 
     refcount_set(&fp->refcnt, 1);
+    fp->is_multiprobe_head = false;
 
     int rc = 0;
     mutex_lock(&fp_context.lock);
@@ -612,25 +602,33 @@ void unregister_frogprobe(frogprobe_t *fp)
 {
     mutex_lock(&fp_context.lock);
 
-    rcu_read_lock();
-    remove_frogprobe_from_table_unsafe(fp);
-    rcu_read_unlock();
-
     fp->gone = true;
 
-    if (list_empty(&fp->list)) {
+    frogprobe_t *first_fp = get_frogprobe(fp->address);
+
+    // regular fp
+    if (first_fp == fp) {
         text_poke_p(fp->address, big_nop, NOP_SIZE);
         wait_till_fp_trampoline_unused(fp);
         vfree(fp->trampoline);
-
-        if (fp->list_srcu) {
-            cleanup_srcu_struct(fp->list_srcu);
-            kfree(fp->list_srcu);
-        }
     } else {
+        // part of a multi-probe
         wait_till_fp_unused(fp);
         list_del_rcu(&fp->list);
-        synchronize_srcu(fp->list_srcu);
+        synchronize_srcu(&first_fp->list_srcu);
+
+        // if multi-probe is empty, just free it
+        if (list_empty(&first_fp->list)) {
+            rcu_read_lock();
+            remove_frogprobe_from_table_unsafe(first_fp);
+            rcu_read_unlock();
+
+            text_poke_p(first_fp->address, big_nop, NOP_SIZE);
+            wait_till_fp_trampoline_unused(first_fp);
+            cleanup_srcu_struct(&first_fp->list_srcu);
+            vfree(first_fp->trampoline);
+            kfree(first_fp);
+        }
     }
 
     mutex_unlock(&fp_context.lock);
