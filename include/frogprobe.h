@@ -7,8 +7,9 @@
  * frogprobe is I/S for hooking kernel functions just like kprobe with the ability to
  * sleep in it, currently kprobe are working with percpu variables (current_kprobe).
  * This type of probe are aiming to solve this issue.
- * Both pre and post handlers should have the same functions signautre (or at least
- * same number of params you wish to inspect).
+ * pre handler should have the same functions signautre (or at least same number
+ * of params you wish to inspect), while post handle has the same but it's first
+ * argument it's the function return-code.
  *
  * Beside post & pre handlers, there is a way to fully replace the symbol by returning
  * the address want to run (in the pre_handler), it will cause the address to be
