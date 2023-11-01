@@ -38,32 +38,6 @@ void remove_frogprobe_from_table_unsafe(frogprobe_t *fp)
     hlist_del_rcu(&fp->hlist);
 }
 
-bool is_symbol_frogprobed_unsafe(frogprobe_t *fp)
-{
-    int hash_idx = hash_ptr(fp->address, FROGPROBE_HASH_BITS);
-    struct hlist_head *head = &fp_context.table[hash_idx];
-    frogprobe_t *curr;
-
-    hlist_for_each_entry_rcu(curr, head, hlist) {
-        if (fp->address == curr->address) {
-            return true;
-        }
-    }
-    return false;
-}
-
-bool is_symbol_frogprobed(frogprobe_t *fp)
-{
-    // no symbol address -> not in table
-    if (!fp->address)
-        return false;
-
-    rcu_read_lock();
-    bool rc = is_symbol_frogprobed_unsafe(fp);
-    rcu_read_unlock();
-    return rc;
-}
-
 #ifdef CONFIG_PROVE_RCU_LIST
 static int is_fp_srcu_read_lock_held(const frogprobe_t *fp)
 {
@@ -135,6 +109,16 @@ frogprobe_t *get_frogprobe(void *address)
     rcu_read_unlock();
     return fp;
 }
+
+bool is_symbol_frogprobed(frogprobe_t *fp)
+{
+    // no symbol address -> not in table
+    if (!fp->address)
+        return false;
+
+    return (get_frogprobe(fp->address) != NULL);
+}
+
 
 void *module_alloc_around_call(void *addr, int size)
 {
@@ -548,15 +532,14 @@ int register_frogprobe(frogprobe_t *fp)
 
     refcount_set(&fp->refcnt, 1);
     fp->is_multiprobe_head = false;
+    fp->gone = false;
 
     int rc = 0;
     mutex_lock(&fp_context.lock);
 
-    fp->gone = false;
     if (is_rereg_probe(fp)) {
         rc = -EINVAL;
         goto out;
-
     } else if (is_symbol_frogprobed(fp)) {
         rc = register_another_frogprobe(fp);
         goto out;
@@ -619,9 +602,7 @@ void unregister_frogprobe(frogprobe_t *fp)
 
         // if multi-probe is empty, just free it
         if (list_empty(&first_fp->list)) {
-            rcu_read_lock();
             remove_frogprobe_from_table_unsafe(first_fp);
-            rcu_read_unlock();
 
             text_poke_p(first_fp->address, big_nop, NOP_SIZE);
             wait_till_fp_trampoline_unused(first_fp);
