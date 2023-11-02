@@ -1,8 +1,19 @@
 # frogprobe
 frogprobe - like x86_64 kprobe but you can sleep in it
 
+## API
+the frogprobe API is documented [frogprobe.h](include/frogprobe.h) and it's contains
+2 main functions:
+1. register_frogprobe
+2. unregister_frogprobe
 
-## Usage:
+which uses to apply and revert probes on sybmols, in order to register each frogprobe
+requires symbol_name (the symbol you want to probe as shown at `/proc/kallsyms`) and
+a pre_handler or a post_handler (or both).
+
+check for example for more details.
+
+## Usage in LKMs:
 If you wish to use this probes in your modules, there is currently 2 options, in each you should run the [`dummy`](example/dummy) binary provided to trigger the frogprobes.
 ### 1. In-source
 checkout at [in_source](example/in_source) folder for the example, just copy the `frogprobe.c `, `encoder.c` and `symbol_extractor.c` into you src folder and their corresponding headers file to your include folder (`symbols_extractor.c` is not mandatory if you have your own way to export symbols).
