@@ -568,6 +568,7 @@ out:
     mutex_unlock(&fp_context.lock);
     return rc;
 }
+EXPORT_SYMBOL(register_frogprobe);
 
 void wait_till_fp_unused(frogprobe_t *fp)
 {
@@ -618,3 +619,4 @@ void unregister_frogprobe(frogprobe_t *fp)
     fp->trampoline = 0;
     fp->npages = 0;
 }
+EXPORT_SYMBOL(unregister_frogprobe);

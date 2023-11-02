@@ -1,20 +1,23 @@
 # frogprobe
 frogprobe - like x86_64 kprobe but you can sleep in it
 
-## Usage:
-If you wish to use this probes in your modules, there is currently 1 option:
-### In-source
-if you want to use this in your source code, checkout at our [in_source](example/in_source) folder for the example, basically just copy the `frogprobe.c `, `encoder.c` and `symbol_extractor.c` into you src folder and their corresponding headers file to your include folder.
 
-Note that `symbols_extractor.c/h` is not mandatory if you have your own way to export symbols.
+## Usage:
+If you wish to use this probes in your modules, there is currently 2 options, in each you should run the [`dummy`](example/dummy) binary provided to trigger the frogprobes.
+### 1. In-source
+checkout at [in_source](example/in_source) folder for the example, just copy the `frogprobe.c `, `encoder.c` and `symbol_extractor.c` into you src folder and their corresponding headers file to your include folder (`symbols_extractor.c` is not mandatory if you have your own way to export symbols).
+### 2. external-LKM (preferred)
+checkout at [external_lkm](example/external_lkm). just type in terminal `make && sudo make install` and both of frogprobe.ko and frogprobe_user.ko will be installed, as the name implies, frogprobe.ko is the module contains the frogprobe logic, while frogprobe_user contain an example usage.
+
 
 ## Known Limitation:
 - Funcitons with more than 6 parameters (parameters are on stack)
 - Funcitons that already kprobes
 
+
 ## TODO:
 - [ ] Add optimization option to pass number of arguments function has
 - [ ] Support Kprobed (as much as possible)
-- [ ] speed up trampoline stubs (siwtch call + ret to 2 jmp, instead rip rel call, movabs + call, ....) and test if really helps
+- [ ] speed up trampoline stubs as much as possible
 - [ ] Support hook functions which doesn't start enough space for call
 - [ ] Implement trampoline using RETHUNK instead of 'ret; int3' (as done in frace create_trampoline)
