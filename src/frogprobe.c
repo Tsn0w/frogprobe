@@ -25,7 +25,7 @@ struct frogprobe_context_s {
     .lock = __MUTEX_INITIALIZER(fp_context.lock),
 };
 
-void add_frogprobe_to_table_unsafe(frogprobe_t *fp)
+static void add_frogprobe_to_table_unsafe(frogprobe_t *fp)
 {
     int hash_idx = hash_ptr(fp->address, FROGPROBE_HASH_BITS);
     INIT_HLIST_NODE(&fp->hlist);
@@ -33,7 +33,7 @@ void add_frogprobe_to_table_unsafe(frogprobe_t *fp)
     hlist_add_head_rcu(&fp->hlist, &fp_context.table[hash_idx]);
 }
 
-void remove_frogprobe_from_table_unsafe(frogprobe_t *fp)
+static void remove_frogprobe_from_table_unsafe(frogprobe_t *fp)
 {
     hlist_del_rcu(&fp->hlist);
 }
@@ -45,7 +45,7 @@ static int is_fp_srcu_read_lock_held(const frogprobe_t *fp)
 }
 #endif /* CONFIG_PROVE_RCU_LIST */
 
-bool is_fp_in_list(frogprobe_t *new, frogprobe_t *head)
+static bool is_fp_in_list(frogprobe_t *new, frogprobe_t *head)
 {
     if (head->is_multiprobe_head) {
         bool rc = false;
@@ -65,7 +65,7 @@ bool is_fp_in_list(frogprobe_t *new, frogprobe_t *head)
     return (new == head);
 }
 
-bool is_rereg_probe_unsafe(frogprobe_t *fp)
+static bool is_rereg_probe_unsafe(frogprobe_t *fp)
 {
     int hash_idx = hash_ptr(fp->address, FROGPROBE_HASH_BITS);
     struct hlist_head *head = &fp_context.table[hash_idx];
@@ -80,7 +80,7 @@ bool is_rereg_probe_unsafe(frogprobe_t *fp)
 
 }
 
-bool is_rereg_probe(frogprobe_t *fp)
+static bool is_rereg_probe(frogprobe_t *fp)
 {
     rcu_read_lock();
     bool rc = is_rereg_probe_unsafe(fp);
@@ -88,7 +88,7 @@ bool is_rereg_probe(frogprobe_t *fp)
     return rc;
 }
 
-frogprobe_t *get_frogprobe_unsafe(void *address)
+static frogprobe_t *get_frogprobe_unsafe(void *address)
 {
     int hash_idx = hash_ptr(address, FROGPROBE_HASH_BITS);
     struct hlist_head *head = &fp_context.table[hash_idx];
@@ -102,7 +102,7 @@ frogprobe_t *get_frogprobe_unsafe(void *address)
     return NULL;
 }
 
-frogprobe_t *get_frogprobe(void *address)
+static frogprobe_t *get_frogprobe(void *address)
 {
     rcu_read_lock();
     frogprobe_t *fp = get_frogprobe_unsafe(address);
@@ -110,7 +110,7 @@ frogprobe_t *get_frogprobe(void *address)
     return fp;
 }
 
-bool is_symbol_frogprobed(frogprobe_t *fp)
+static bool is_symbol_frogprobed(frogprobe_t *fp)
 {
     // no symbol address -> not in table
     if (!fp->address)
@@ -120,7 +120,7 @@ bool is_symbol_frogprobed(frogprobe_t *fp)
 }
 
 
-void *module_alloc_around_call(void *addr, int size)
+static void *module_alloc_around_call(void *addr, int size)
 {
     unsigned long call_range = 0x7fffffff; // ±31bit offset
     unsigned long start = (unsigned long)addr - call_range;
@@ -130,7 +130,7 @@ void *module_alloc_around_call(void *addr, int size)
                                    NUMA_NO_NODE, __builtin_return_address(0));
 }
 
-void call_post_handler(frogprobe_t *fp, frogprobe_regs_t *regs, unsigned long rc)
+static void call_post_handler(frogprobe_t *fp, frogprobe_regs_t *regs, unsigned long rc)
 {
     if (!fp->post_handler || fp->gone) {
         return;
@@ -143,8 +143,8 @@ void call_post_handler(frogprobe_t *fp, frogprobe_regs_t *regs, unsigned long rc
 
 }
 
-void frogprobe_post_handler_caller(unsigned long addr, frogprobe_regs_t *regs,
-                                   unsigned long rc)
+static void frogprobe_post_handler_caller(unsigned long addr, frogprobe_regs_t *regs,
+                                          unsigned long rc)
 {
     frogprobe_t *fp = get_frogprobe((void *)(addr - CALL_SIZE));
     if (!fp) {
@@ -224,8 +224,8 @@ __asm__(
                                 LEA_RAX_RIP_DEST_SIZE + PUSH_R11_SIZE +            \
                                 PUSH_RAX_SIZE + MOVABS_RAX_SIZE + PUSH_RAX_SIZE +  \
                                 PUSH_R11_SIZE)
-void prepare_post_handler_trampoline(char *tramp, int *offset, uint64_t post_handler,
-                                     int npages)
+static void prepare_post_handler_trampoline(char *tramp, int *offset,
+                                            uint64_t post_handler, int npages)
 {
     encode_pop_r11(tramp, offset);
     encode_push_calling_conventions_regs(tramp, offset);
@@ -238,7 +238,7 @@ void prepare_post_handler_trampoline(char *tramp, int *offset, uint64_t post_han
 }
 
 
-unsigned long call_pre_handler(frogprobe_t *fp, frogprobe_regs_t *regs)
+static unsigned long call_pre_handler(frogprobe_t *fp, frogprobe_regs_t *regs)
 {
     if (!fp->pre_handler || fp->gone) {
         return 0;
@@ -251,7 +251,7 @@ unsigned long call_pre_handler(frogprobe_t *fp, frogprobe_regs_t *regs)
     return rc;
 }
 
-unsigned long frogprobe_pre_handler_ex(unsigned long addr, frogprobe_regs_t *regs)
+static unsigned long frogprobe_pre_handler_ex(unsigned long addr, frogprobe_regs_t *regs)
 {
     frogprobe_t *fp = get_frogprobe((void *)(addr - CALL_SIZE));
     if (!fp) {
@@ -298,7 +298,7 @@ unsigned long frogprobe_pre_handler_ex(unsigned long addr, frogprobe_regs_t *reg
  * pre_handler_offset:
  *  [fp->pre_handler]
  */
-bool create_trampoline(frogprobe_t *fp)
+static bool create_trampoline(frogprobe_t *fp)
 {
     bool is_post_handler = fp->post_handler ? true : false;
     int text_stub_size = LOCK_INC_RIP_REL_OFFSET_SIZE + PUSH_CALL_CONVENTIONS_REGS_SIZE +
@@ -364,12 +364,12 @@ bool create_trampoline(frogprobe_t *fp)
     return true;
 }
 
-bool trampoline_prepared_for_post(frogprobe_t *first)
+static bool trampoline_prepared_for_post(frogprobe_t *first)
 {
     return !is_insn_pop_r11(first->trampoline + LOCK_INC_RIP_REL_OFFSET_SIZE);
 }
 
-void wait_till_trampoline_unused(char *trampoline, int npages)
+static void wait_till_trampoline_unused(char *trampoline, int npages)
 {
     volatile char *trampoline_counter_p = trampoline + PAGE_SIZE * npages;
     while (*(unsigned long *)trampoline_counter_p != 0) {
@@ -384,7 +384,7 @@ static void release_trampoline_work_fn(struct work_struct *work)
     vfree(fp_work->tramp_addr);
 }
 
-void release_trampoline_later(char *tramp_addr, unsigned long npages)
+static void release_trampoline_later(char *tramp_addr, unsigned long npages)
 {
     rereg_fp_work_t *fp_work = kmalloc(sizeof(*fp_work), GFP_KERNEL);
     if (fp_work) {
@@ -399,7 +399,7 @@ void release_trampoline_later(char *tramp_addr, unsigned long npages)
     }
 }
 
-int create_frogprobe_head(frogprobe_t *previous)
+static int create_frogprobe_head(frogprobe_t *previous)
 {
     frogprobe_t *head = kzalloc(sizeof(*head), GFP_KERNEL);
     if (!head) {
@@ -430,7 +430,7 @@ int create_frogprobe_head(frogprobe_t *previous)
     return 0;
 }
 
-int register_another_frogprobe(frogprobe_t *fp)
+static int register_another_frogprobe(frogprobe_t *fp)
 {
     frogprobe_t *first_fp = get_frogprobe(fp->address);
     // TODO: should never fail?
@@ -570,14 +570,14 @@ out:
 }
 EXPORT_SYMBOL(register_frogprobe);
 
-void wait_till_fp_unused(frogprobe_t *fp)
+static void wait_till_fp_unused(frogprobe_t *fp)
 {
     while (refcount_read(&fp->refcnt) > 1) {
         schedule();
     }
 }
 
-void wait_till_fp_trampoline_unused(frogprobe_t *fp)
+static void wait_till_fp_trampoline_unused(frogprobe_t *fp)
 {
     wait_till_trampoline_unused(fp->trampoline, fp->npages);
 }
